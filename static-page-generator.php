@@ -18,6 +18,8 @@ class StaticPageGenerator {
         add_action('wp_ajax_toggle_autoupdate', array($this, 'toggle_autoupdate'));
         add_action('admin_enqueue_scripts', array($this, 'enqueue_scripts'));
         add_action('post_updated', array($this, 'handle_page_update'), 10, 3);
+        
+        register_activation_hook(__FILE__, array($this, 'create_tracking_table'));
     }
     
     public function add_admin_menu() {
@@ -93,6 +95,8 @@ class StaticPageGenerator {
                         <th>URL</th>
                         <th>Estado</th>
                         <th>Auto-update</th>
+                        <th>Última Generación</th>
+                        <th>URL Generada</th>
                         <th>Acciones</th>
                     </tr>
                 </thead>
@@ -100,6 +104,7 @@ class StaticPageGenerator {
                     <?php foreach ($pages as $page): 
                         $autoupdate_enabled = get_post_meta($page->ID, 'spg_autoupdate', true);
                         $page_url = ($page->ID == 0) ? home_url('/') : get_permalink($page->ID);
+                        $generation_data = $this->get_generation_data($page->ID);
                     ?>
                     <tr>
                         <td><?php echo esc_html($page->post_title); ?></td>
@@ -110,6 +115,22 @@ class StaticPageGenerator {
                                    class="autoupdate-checkbox" 
                                    data-page-id="<?php echo $page->ID; ?>"
                                    <?php checked($autoupdate_enabled, '1'); ?> />
+                        </td>
+                        <td>
+                            <?php if ($generation_data): ?>
+                                <span class="generation-date"><?php echo esc_html($generation_data['generated_at']); ?></span>
+                            <?php else: ?>
+                                <span class="no-generation">No generado</span>
+                            <?php endif; ?>
+                        </td>
+                        <td>
+                            <?php if ($generation_data && $generation_data['generated_url']): ?>
+                                <a href="<?php echo esc_url($generation_data['generated_url']); ?>" target="_blank" class="generated-link">
+                                    Ver HTML 🔗
+                                </a>
+                            <?php else: ?>
+                                <span class="no-url">-</span>
+                            <?php endif; ?>
                         </td>
                         <td>
                             <button class="button button-primary generate-static" 
@@ -259,9 +280,10 @@ class StaticPageGenerator {
         }
         
         if ($this->s3_credentials_configured()) {
-            $result = $this->upload_to_s3($html_content, $page_title, $page_id);
+            $s3_url = $this->upload_to_s3($html_content, $page_title, $page_id);
             
-            if ($result) {
+            if ($s3_url) {
+                $this->save_generation_data($page_id, $s3_url, 's3');
                 wp_send_json_success(array('message' => '🔥 HTML forjado y subido a S3 correctamente'));
             } else {
                 wp_send_json_error(array('message' => '❌ Error al forjar la página en S3'));
@@ -270,6 +292,7 @@ class StaticPageGenerator {
             $temp_url = $this->save_to_temp_folder($html_content, $page_title, $page_id);
             
             if ($temp_url) {
+                $this->save_generation_data($page_id, $temp_url, 'local');
                 wp_send_json_success(array('message' => '🔥 HTML sólido forjado: <a href="' . esc_url($temp_url) . '" target="_blank">Ver archivo</a>'));
             } else {
                 wp_send_json_error(array('message' => '❌ Error al forjar HTML sólido'));
@@ -408,7 +431,14 @@ class StaticPageGenerator {
         }
         
         $response_code = wp_remote_retrieve_response_code($response);
-        return ($response_code >= 200 && $response_code < 300);
+        
+        if ($response_code >= 200 && $response_code < 300) {
+            // Generar URL de S3 para acceso público
+            $s3_public_url = "https://{$s3_bucket}.s3.{$s3_region}.amazonaws.com/{$filename}";
+            return $s3_public_url;
+        }
+        
+        return false;
     }
     
     public function toggle_autoupdate() {
@@ -449,10 +479,76 @@ class StaticPageGenerator {
         }
         
         if ($this->s3_credentials_configured()) {
-            $this->upload_to_s3($html_content, $post_after->post_title, $post_id);
+            $s3_url = $this->upload_to_s3($html_content, $post_after->post_title, $post_id);
+            if ($s3_url) {
+                $this->save_generation_data($post_id, $s3_url, 's3');
+            }
         } else {
-            $this->save_to_temp_folder($html_content, $post_after->post_title, $post_id);
+            $temp_url = $this->save_to_temp_folder($html_content, $post_after->post_title, $post_id);
+            if ($temp_url) {
+                $this->save_generation_data($post_id, $temp_url, 'local');
+            }
         }
+    }
+    
+    public function create_tracking_table() {
+        global $wpdb;
+        
+        $table_name = $wpdb->prefix . 'staticforge_generated';
+        
+        $charset_collate = $wpdb->get_charset_collate();
+        
+        $sql = "CREATE TABLE $table_name (
+            id mediumint(9) NOT NULL AUTO_INCREMENT,
+            page_id int(11) NOT NULL,
+            generated_url varchar(500) NOT NULL,
+            storage_type varchar(20) NOT NULL,
+            generated_at datetime DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY page_id (page_id)
+        ) $charset_collate;";
+        
+        require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+        dbDelta($sql);
+    }
+    
+    private function save_generation_data($page_id, $generated_url, $storage_type) {
+        global $wpdb;
+        
+        $table_name = $wpdb->prefix . 'staticforge_generated';
+        
+        $wpdb->replace(
+            $table_name,
+            array(
+                'page_id' => $page_id,
+                'generated_url' => $generated_url,
+                'storage_type' => $storage_type,
+                'generated_at' => current_time('mysql')
+            ),
+            array('%d', '%s', '%s', '%s')
+        );
+    }
+    
+    private function get_generation_data($page_id) {
+        global $wpdb;
+        
+        $table_name = $wpdb->prefix . 'staticforge_generated';
+        
+        $result = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT * FROM $table_name WHERE page_id = %d",
+                $page_id
+            ),
+            ARRAY_A
+        );
+        
+        if ($result) {
+            // Formatear fecha de manera legible
+            $date = new DateTime($result['generated_at']);
+            $result['generated_at'] = $date->format('d/m/Y H:i');
+        }
+        
+        return $result;
     }
 }
 
