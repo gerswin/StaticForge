@@ -1,0 +1,38 @@
+{
+    "name": "gerswin/staticforge",
+    "description": "Convierte WP en HTML sólido - WordPress Static Page Generator",
+    "type": "wordpress-plugin",
+    "license": "GPL-2.0-or-later",
+    "authors": [
+        {
+            "name": "Gerswin Pineda",
+            "email": "gerswin@example.com"
+        }
+    ],
+    "require": {
+        "php": ">=7.4"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.0|^10.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "StaticForge\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "StaticForge\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "test-coverage": "phpunit --coverage-html tests/coverage/html",
+        "test-unit": "phpunit --testsuite=\"StaticForge Unit Tests\"",
+        "test-integration": "phpunit --testsuite=\"StaticForge Integration Tests\""
+    },
+    "config": {
+        "sort-packages": true,
+        "optimize-autoloader": true
+    }
+}
