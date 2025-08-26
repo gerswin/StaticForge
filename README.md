@@ -6,12 +6,14 @@ StaticForge es un plugin de WordPress que convierte páginas dinámicas en archi
 
 ## 🔥 Características
 
-- **🔨 Forja HTML sólido** - Convierte páginas de WordPress en archivos HTML estáticos
-- **☁️ Integración S3** - Sube automáticamente a Amazon S3 o guarda localmente
-- **⚡ Auto-update** - Regenera automáticamente cuando actualizas páginas
-- **🏠 Soporte para Home** - Incluye la página de inicio en la generación
-- **📁 Estructura organizada** - Guarda como `slug/index.html`
-- **🛡️ Fallback local** - Si S3 no está configurado, guarda en carpeta temporal
+- **🔨 Forja HTML sólido**: Convierte páginas de WordPress en archivos HTML estáticos.
+- **☁️ Integración S3**: Sube automáticamente a Amazon S3 (o guarda localmente si no está configurado).
+- **⚡ Auto‑regeneración por página**: Opción de auto‑update por página al actualizar contenido.
+- **🌩️ CloudFront**: Gestión de behaviors, invalidaciones y estado de la distribución desde el admin.
+- **⬆️ Auto‑updater del plugin**: Actualizaciones del plugin desde GitHub Releases (sin WP.org).
+- **🏠 Soporte para Home**: Incluye la página de inicio.
+- **📁 Estructura organizada**: `slug/index.html`.
+- **🛡️ Fallback local**: Si S3 no está configurado, guarda en carpeta temporal.
 
 ## 🚀 Instalación
 
@@ -29,6 +31,15 @@ StaticForge es un plugin de WordPress que convierte páginas dinámicas en archi
    - AWS Secret Key
    - Nombre del Bucket
    - Región de S3
+
+### CloudFront (Opcional)
+1. Ve a **StaticForge > Configuración S3** y define:
+   - `CloudFront Distribution ID`
+   - (Opcional) `Prefijo S3` para organizar por entornos (ej. `prod/`)
+2. En **StaticForge > CloudFront** puedes:
+   - Crear behaviors por path (ej. `/promos` genera `/promos` y `/promos/*`).
+   - Invalidar paths (uno por línea) para refrescar cache.
+   - Ver estado de la distribución (domain, estado, última modificación).
 
 ### Sin S3
 Si no configuras S3, los archivos se guardan en:
@@ -56,23 +67,51 @@ Si no configuras S3, los archivos se guardan en:
 
 ## 📋 Requisitos
 
-- WordPress 5.0+
+- WordPress 6.0+
 - PHP 7.4+
 - Permisos de escritura en `/wp-content/uploads/`
+- (Opcional) AWS credenciales con acceso S3/CloudFront
+
+## 🔁 Actualizaciones del Plugin (GitHub)
+
+Este plugin se actualiza desde GitHub Releases (no WP.org), gracias al auto‑updater incorporado.
+
+- Publica releases etiquetadas como `vX.Y.Z` en GitHub; la versión del plugin debe ser `X.Y.Z`.
+- En WordPress, el plugin mostrará la actualización cuando haya una versión más reciente.
+- Para forzar chequeo: visita `wp-admin/plugins.php?force-check=1`.
+- Si el repo es privado o para evitar rate limiting, define un token:
+  - Constante `STATICFORGE_GITHUB_TOKEN` en `wp-config.php`, o
+  - Guarda `spg_github_token` (campo opcional) si se expone en la config.
+
+El encabezado del plugin incluye `Update URI: https://github.com/gerswin/StaticForge` para evitar conflictos con WP.org.
 
 ## 🔧 Desarrollo
 
-Este plugin está en desarrollo activo. Contribuciones son bienvenidas.
+- Carpeta del plugin: `/wp-content/plugins/staticforge/`
+- Ejecutar Composer (si fuera necesario):
+  ```bash
+  cd /wp-content/plugins/staticforge
+  composer install
+  ```
+  El proyecto incluye `vendor/` según el release; Composer asegura el AWS SDK si no estuviera presente.
+
+Contribuciones son bienvenidas.
 
 ## 📝 Changelog
 
+### v1.2.0
+- Auto‑updater del plugin vía GitHub Releases (con soporte de token y headers adecuados).
+- Gestión de CloudFront: behaviors por path, invalidaciones y estado de distribución.
+- Renombrado del slug del plugin a `staticforge` (estándar en minúsculas).
+- Mejora de cabeceras del plugin: `Update URI`, requisitos y versiones probadas.
+
 ### v1.0
-- Generación inicial de páginas estáticas
-- Integración con Amazon S3
-- Sistema de auto-update
-- Soporte para página home
-- Estructura `slug/index.html`
-- Fallback a carpeta temporal
+- Generación inicial de páginas estáticas.
+- Integración con Amazon S3.
+- Auto‑update por página (regeneración al editar).
+- Soporte para página home.
+- Estructura `slug/index.html`.
+- Fallback a carpeta temporal.
 
 ## 👨‍💻 Autor
 

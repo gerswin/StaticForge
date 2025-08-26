@@ -2,7 +2,7 @@
 /**
  * Plugin Name: StaticForge
  * Description: Convierte WP en HTML sólido
- * Version: 1.2.0
+ * Version: 1.2.2
  * Author: Gerswin Pineda
  * Update URI: https://github.com/gerswin/StaticForge
  * Requires at least: 6.0
@@ -1173,7 +1173,7 @@ class StaticPageGenerator {
                 <h3>⚡ Mejora el rendimiento con AWS SDK</h3>
                 <p>Para mayor confiabilidad, instala el AWS SDK for PHP:</p>
                 <ol>
-                    <li>Navega al directorio del plugin: <code>/wp-content/plugins/static-page-generator.php_/</code></li>
+                    <li>Navega al directorio del plugin: <code>/wp-content/plugins/staticforge/</code></li>
                     <li>Ejecuta: <code>composer install</code></li>
                     <li>El SDK se instalará automáticamente y mejorará la conectividad S3</li>
                 </ol>
