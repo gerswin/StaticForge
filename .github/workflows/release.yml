@@ -1,0 +1,63 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.1'
+        
+    - name: Install Composer dependencies
+      run: composer install --no-dev --optimize-autoloader
+      
+    - name: Create plugin zip
+      run: |
+        mkdir -p build
+        rsync -av --exclude-from='.distignore' . build/staticforge/
+        cd build
+        zip -r staticforge-${GITHUB_REF#refs/tags/}.zip staticforge/
+        
+    - name: Create Release
+      uses: actions/create-release@v1
+      id: create_release
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: StaticForge ${{ github.ref }}
+        draft: false
+        prerelease: false
+        body: |
+          ## 🚀 Nueva versión de StaticForge
+          
+          ### Cambios en esta versión:
+          - Ver commit history para detalles completos
+          
+          ### 📥 Instalación
+          1. Descarga el archivo zip
+          2. Sube a WordPress via **Plugins > Añadir nuevo > Subir plugin**
+          3. Activa el plugin
+          
+          ### 🔄 Actualización automática
+          Si ya tienes StaticForge instalado, recibirás una notificación de actualización en el panel de WordPress.
+          
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: build/staticforge-${{ github.ref }}.zip
+        asset_name: staticforge-${{ github.ref }}.zip
+        asset_content_type: application/zip

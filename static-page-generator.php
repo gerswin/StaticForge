@@ -13,11 +13,19 @@ if (!defined('ABSPATH')) {
 // Cargar AWS SDK
 require_once __DIR__ . '/vendor/autoload.php';
 
+// Cargar auto-updater
+require_once __DIR__ . '/includes/class-staticforge-updater.php';
+
 // Verificar que AWS SDK se cargó correctamente
 if (class_exists('Aws\CloudFront\CloudFrontClient')) {
     error_log('StaticForge: AWS SDK cargado correctamente');
 } else {
     error_log('StaticForge: ERROR - AWS SDK no se pudo cargar');
+}
+
+// Inicializar auto-updater
+if (is_admin()) {
+    new StaticForge_Updater(__FILE__);
 }
 
 class StaticPageGenerator {
@@ -124,6 +132,41 @@ class StaticPageGenerator {
             array_unshift($pages, $home_page);
         }
         ?>
+        <style>
+        .autoupdate-checkbox {
+            margin-left: 10px;
+        }
+        .spinner {
+            margin-left: 10px;
+            display: none;
+        }
+        .spinner.is-active {
+            display: inline-block;
+        }
+        .generated-link {
+            text-decoration: none;
+            padding: 2px 6px;
+            border-radius: 3px;
+            background: #f0f0f0;
+            display: inline-block;
+            margin: 2px 0;
+            font-size: 12px;
+        }
+        .generated-link:hover {
+            background: #e0e0e0;
+        }
+        .cf-status-active {
+            color: #46b450;
+            font-weight: bold;
+        }
+        .cf-status-error {
+            color: #dc3232;
+        }
+        .cf-not-configured {
+            color: #999;
+            font-style: italic;
+        }
+        </style>
         <div class="wrap">
             <h1>StaticForge - Convierte WP en HTML sólido</h1>
             <table class="wp-list-table widefat fixed striped">
@@ -164,9 +207,26 @@ class StaticPageGenerator {
                         </td>
                         <td>
                             <?php if ($generation_data && $generation_data['generated_url']): ?>
-                                <a href="<?php echo esc_url($generation_data['generated_url']); ?>" target="_blank" class="generated-link">
-                                    Ver HTML 🔗
+                                <?php 
+                                // Mostrar URL de S3
+                                ?>
+                                <a href="<?php echo esc_url($generation_data['generated_url']); ?>" target="_blank" class="generated-link" title="Ver en S3">
+                                    📦 S3
                                 </a>
+                                <?php 
+                                // Si CloudFront está configurado, mostrar también esa URL
+                                if ($this->cloudfront_configured()) {
+                                    $cloudfront_manager = new CloudFrontManager();
+                                    $page_slug = ($page->ID == 0) ? 'home' : $page->post_name;
+                                    $cf_url = $cloudfront_manager->get_cloudfront_url('/' . $page_slug);
+                                    if ($cf_url): ?>
+                                        <br>
+                                        <a href="<?php echo esc_url($cf_url); ?>" target="_blank" class="generated-link" title="Ver en CloudFront">
+                                            ☁️ CloudFront
+                                        </a>
+                                    <?php endif;
+                                }
+                                ?>
                             <?php else: ?>
                                 <span class="no-url">-</span>
                             <?php endif; ?>
@@ -560,27 +620,18 @@ class StaticPageGenerator {
             }
             
             $key_index = $page_slug . '/index.html';
-            // Subir index.html
+            
+            // Subir SOLO index.html (CloudFront Function maneja las redirecciones)
             $s3->putObject([
                 'Bucket' => $s3_bucket,
                 'Key' => $key_index,
                 'Body' => $content,
-                'ContentType' => 'text/html'
+                'ContentType' => 'text/html',
+                'CacheControl' => 'max-age=3600'
+                // ACL removido - el bucket usa políticas en lugar de ACLs
             ]);
-            // Copia adicional para soportar /slug (sin slash final)
-            $s3->putObject([
-                'Bucket' => $s3_bucket,
-                'Key' => $page_slug,
-                'Body' => $content,
-                'ContentType' => 'text/html'
-            ]);
-            // Copia para soportar /slug/ (con slash final)
-            $s3->putObject([
-                'Bucket' => $s3_bucket,
-                'Key' => $page_slug . '/',
-                'Body' => $content,
-                'ContentType' => 'text/html'
-            ]);
+            
+            error_log('StaticForge: Contenido HTML subido a S3: ' . $key_index);
             
             $public_host = ($s3_region === 'us-east-1')
                 ? "{$s3_bucket}.s3.amazonaws.com"
@@ -754,8 +805,9 @@ class StaticPageGenerator {
         // Crear path pattern basado en el slug
         $path_pattern = '/' . $page_slug;
         
-        // Crear behavior para esta página específica
-        $result = $cloudfront_manager->create_behavior($path_pattern);
+        // Crear behavior SIN sobrescribir el contenido existente
+        // El tercer parámetro indica que NO debe crear placeholder
+        $result = $cloudfront_manager->create_behavior_without_placeholder($path_pattern);
         
         // Guardar estado en la base de datos
         if ($result) {
@@ -852,9 +904,18 @@ class StaticPageGenerator {
             $this->handle_cloudfront_invalidation();
         }
         
+        if (isset($_POST['delete_behavior'])) {
+            $this->handle_cloudfront_behavior_deletion();
+        }
+        
         ?>
         <div class="wrap">
             <h1>CloudFront - Gestión de Behaviors</h1>
+            
+            <h2>Behaviors Actuales</h2>
+            <?php $this->display_current_behaviors(); ?>
+            
+            <hr>
             
             <h2>Crear Nuevo Behavior</h2>
             <form method="post" action="">
@@ -978,6 +1039,86 @@ class StaticPageGenerator {
         }
     }
     
+    private function display_current_behaviors() {
+        $distribution_id = get_option('spg_cloudfront_distribution_id');
+        
+        if (empty($distribution_id)) {
+            echo '<p>⚠️ No hay Distribution ID configurado</p>';
+            return;
+        }
+        
+        $cloudfront_manager = new CloudFrontManager();
+        $behaviors = $cloudfront_manager->get_all_behaviors();
+        
+        if (!$behaviors || empty($behaviors)) {
+            echo '<p>📭 No hay behaviors configurados</p>';
+            return;
+        }
+        
+        ?>
+        <table class="wp-list-table widefat fixed striped">
+            <thead>
+                <tr>
+                    <th>Path Pattern</th>
+                    <th>Target Origin</th>
+                    <th>Cache Policy</th>
+                    <th>Function</th>
+                    <th>Acciones</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ($behaviors as $behavior): ?>
+                <tr>
+                    <td><strong><?php echo esc_html($behavior['PathPattern']); ?></strong></td>
+                    <td><?php echo esc_html($behavior['TargetOriginId']); ?></td>
+                    <td><?php echo isset($behavior['CachePolicyId']) ? '✅ Configurado' : '❌ Sin cache policy'; ?></td>
+                    <td>
+                        <?php 
+                        if (isset($behavior['FunctionAssociations']) && $behavior['FunctionAssociations']['Quantity'] > 0) {
+                            echo '⚡ CloudFront Function activa';
+                        } else {
+                            echo '➖ Sin función';
+                        }
+                        ?>
+                    </td>
+                    <td>
+                        <form method="post" action="" style="display:inline;">
+                            <?php wp_nonce_field('spg_cloudfront_delete_nonce', 'delete_nonce'); ?>
+                            <input type="hidden" name="path_pattern" value="<?php echo esc_attr($behavior['PathPattern']); ?>">
+                            <button type="submit" name="delete_behavior" class="button button-small" 
+                                    onclick="return confirm('¿Estás seguro de eliminar el behavior <?php echo esc_js($behavior['PathPattern']); ?>?');">
+                                🗑️ Eliminar
+                            </button>
+                        </form>
+                    </td>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+        <?php
+    }
+    
+    private function handle_cloudfront_behavior_deletion() {
+        if (!wp_verify_nonce($_POST['delete_nonce'], 'spg_cloudfront_delete_nonce')) {
+            wp_die('Error de seguridad');
+        }
+        
+        if (!current_user_can('manage_options')) {
+            wp_die('Permisos insuficientes');
+        }
+        
+        $path_pattern = sanitize_text_field($_POST['path_pattern']);
+        
+        $cloudfront_manager = new CloudFrontManager();
+        $result = $cloudfront_manager->delete_behavior($path_pattern);
+        
+        if ($result) {
+            echo '<div class="notice notice-success"><p>✅ Behavior ' . esc_html($path_pattern) . ' eliminado exitosamente</p></div>';
+        } else {
+            echo '<div class="notice notice-error"><p>❌ Error al eliminar behavior ' . esc_html($path_pattern) . '</p></div>';
+        }
+    }
+    
     public function debug_page() {
         ?>
         <div class="wrap">
@@ -1070,6 +1211,12 @@ class StaticPageGenerator {
                 <span id="cf-test-result"></span>
             </p>
             <?php endif; ?>
+            
+            <h2>Actualizaciones</h2>
+            <p>
+                <a href="<?php echo add_query_arg('force-check', '1'); ?>" class="button">🔄 Verificar Actualizaciones</a>
+                <span style="margin-left: 10px; color: #666;">Versión actual: <strong>1.1</strong></span>
+            </p>
             
             <h2>Logs Recientes</h2>
             <div style="background: #f1f1f1; padding: 10px; font-family: monospace; height: 300px; overflow-y: auto;">
@@ -1214,6 +1361,7 @@ class CloudFrontManager {
     
     private $distribution_id;
     private $cloudfront_client;
+    private $distribution_domain;
     
     public function __construct() {
         $this->distribution_id = get_option('spg_cloudfront_distribution_id');
@@ -1232,10 +1380,41 @@ class CloudFrontManager {
             error_log('StaticForge CloudFront: Cliente SDK inicializado correctamente');
             error_log('StaticForge CloudFront: Distribution ID: ' . $this->distribution_id);
             
+            // Obtener dominio de CloudFront
+            $this->get_distribution_domain();
+            
         } catch (\Exception $e) {
             error_log('StaticForge CloudFront: Error inicializando cliente SDK: ' . $e->getMessage());
             $this->cloudfront_client = null;
         }
+    }
+    
+    public function get_cloudfront_url($path) {
+        if (!$this->distribution_domain) {
+            return false;
+        }
+        return 'https://' . $this->distribution_domain . $path;
+    }
+    
+    private function get_distribution_domain() {
+        if (!$this->cloudfront_client || !$this->distribution_id) {
+            return false;
+        }
+        
+        try {
+            $result = $this->cloudfront_client->getDistribution([
+                'Id' => $this->distribution_id
+            ]);
+            
+            if (isset($result['Distribution']['DomainName'])) {
+                $this->distribution_domain = $result['Distribution']['DomainName'];
+                return $this->distribution_domain;
+            }
+        } catch (\Exception $e) {
+            error_log('StaticForge CloudFront: Error obteniendo dominio: ' . $e->getMessage());
+        }
+        
+        return false;
     }
     
     public function validate_and_normalize_path($path) {
@@ -1258,7 +1437,17 @@ class CloudFrontManager {
         return $path;
     }
     
+    public function create_behavior_without_placeholder($path_pattern) {
+        // Versión que NO crea placeholder en S3
+        return $this->create_behavior_internal($path_pattern, '', false);
+    }
+    
     public function create_behavior($path_pattern, $s3_prefix = '') {
+        // Versión que SÍ crea placeholder en S3 (para paths manuales)
+        return $this->create_behavior_internal($path_pattern, $s3_prefix, true);
+    }
+    
+    private function create_behavior_internal($path_pattern, $s3_prefix = '', $create_placeholder = true) {
         error_log('StaticForge CloudFront: Iniciando create_behavior para path: ' . $path_pattern);
         
         $normalized_path = $this->validate_and_normalize_path($path_pattern);
@@ -1278,9 +1467,13 @@ class CloudFrontManager {
         
         error_log('StaticForge CloudFront: Configuración obtenida exitosamente');
         
-        // 2. Preparar S3 (crear placeholder si es necesario) - Opcional
-        $s3_result = $this->prepare_s3_structure($normalized_path, $s3_prefix);
-        error_log('StaticForge CloudFront: S3 preparado, resultado: ' . ($s3_result ? 'éxito' : 'error (continuando)'));
+        // 2. Preparar S3 SOLO si se solicita explícitamente
+        if ($create_placeholder) {
+            $s3_result = $this->prepare_s3_structure($normalized_path, $s3_prefix);
+            error_log('StaticForge CloudFront: S3 preparado, resultado: ' . ($s3_result ? 'éxito' : 'error (continuando)'));
+        } else {
+            error_log('StaticForge CloudFront: Omitiendo creación de placeholder (contenido ya existe)');
+        }
         
         // 3. Añadir behaviors (sin CloudFront Functions)
         $behaviors_added = $this->add_behaviors_to_config(
@@ -1400,13 +1593,34 @@ class CloudFrontManager {
         // Construir path completo en S3
         $full_prefix = trim($cloudfront_prefix . '/' . $s3_prefix . '/' . ltrim($path, '/'), '/');
         $s3_key = $full_prefix . '/index.html';
-        $s3_key_noslash = $full_prefix;       // e.g., sample-page
-        $s3_key_trailing = $full_prefix . '/'; // e.g., sample-page/
         
         error_log('StaticForge CloudFront: S3 path calculado: ' . $s3_key);
         
-        // Crear placeholder si no existe
-        $placeholder_content = '<!DOCTYPE html>
+        try {
+            // Verificar si el archivo ya existe en S3
+            $s3 = new \Aws\S3\S3Client([
+                'version' => 'latest',
+                'region' => $s3_region,
+                'credentials' => [
+                    'key' => get_option('spg_aws_access_key'),
+                    'secret' => get_option('spg_aws_secret_key'),
+                ],
+            ]);
+            
+            // Intentar obtener el objeto para ver si existe
+            try {
+                $result = $s3->headObject([
+                    'Bucket' => $s3_bucket,
+                    'Key' => $s3_key
+                ]);
+                error_log('StaticForge CloudFront: Archivo ya existe en S3, no se sobrescribirá');
+                return true;
+            } catch (\Aws\S3\Exception\S3Exception $e) {
+                // Si el objeto no existe, crear un placeholder temporal
+                if ($e->getStatusCode() === 404) {
+                    error_log('StaticForge CloudFront: Archivo no existe, creando placeholder temporal');
+                    
+                    $placeholder_content = '<!DOCTYPE html>
 <html>
 <head>
     <title>StaticForge - Path Ready</title>
@@ -1417,44 +1631,22 @@ class CloudFrontManager {
     <p>Generado por StaticForge</p>
 </body>
 </html>';
-        
-        try {
-            // Usar AWS SDK para subir el placeholder a S3
-            $s3 = new \Aws\S3\S3Client([
-                'version' => 'latest',
-                'region' => $s3_region,
-                'credentials' => [
-                    'key' => get_option('spg_aws_access_key'),
-                    'secret' => get_option('spg_aws_secret_key'),
-                ],
-            ]);
-            
-            // index.html
-            $s3->putObject([
-                'Bucket' => $s3_bucket,
-                'Key' => $s3_key,
-                'Body' => $placeholder_content,
-                'ContentType' => 'text/html',
-            ]);
-            // slug (sin slash)
-            $s3->putObject([
-                'Bucket' => $s3_bucket,
-                'Key' => $s3_key_noslash,
-                'Body' => $placeholder_content,
-                'ContentType' => 'text/html',
-            ]);
-            // slug/ (con slash final)
-            $s3->putObject([
-                'Bucket' => $s3_bucket,
-                'Key' => $s3_key_trailing,
-                'Body' => $placeholder_content,
-                'ContentType' => 'text/html',
-            ]);
-            
-            error_log('StaticForge CloudFront: S3 placeholder subido con SDK');
-            return true;
+                    
+                    // Solo crear el placeholder si no existe
+                    $s3->putObject([
+                        'Bucket' => $s3_bucket,
+                        'Key' => $s3_key,
+                        'Body' => $placeholder_content,
+                        'ContentType' => 'text/html',
+                    ]);
+                    
+                    error_log('StaticForge CloudFront: S3 placeholder temporal creado');
+                    return true;
+                }
+                throw $e;
+            }
         } catch (\Exception $e) {
-            error_log('StaticForge CloudFront: Error subiendo placeholder a S3 con SDK: ' . $e->getMessage());
+            error_log('StaticForge CloudFront: Error en prepare_s3_structure: ' . $e->getMessage());
             return false;
         }
     }
@@ -2081,6 +2273,90 @@ class CloudFrontManager {
             ];
         } catch (\Aws\CloudFront\Exception\CloudFrontException $e) {
             error_log('StaticForge CloudFront: Error obteniendo estatus de distribución con SDK: ' . $e->getMessage());
+            return false;
+        }
+    }
+    
+    public function get_all_behaviors() {
+        if (!$this->cloudfront_client || !$this->distribution_id) {
+            return false;
+        }
+        
+        try {
+            $result = $this->cloudfront_client->getDistributionConfig([
+                'Id' => $this->distribution_id
+            ]);
+            
+            if (isset($result['DistributionConfig']['CacheBehaviors']['Items'])) {
+                return $result['DistributionConfig']['CacheBehaviors']['Items'];
+            }
+            
+            return [];
+            
+        } catch (\Exception $e) {
+            error_log('StaticForge CloudFront: Error obteniendo behaviors: ' . $e->getMessage());
+            return false;
+        }
+    }
+    
+    public function delete_behavior($path_pattern) {
+        if (!$this->cloudfront_client || !$this->distribution_id) {
+            error_log('StaticForge CloudFront: Cliente o Distribution ID no disponible');
+            return false;
+        }
+        
+        try {
+            // 1. Obtener configuración actual
+            $result = $this->cloudfront_client->getDistributionConfig([
+                'Id' => $this->distribution_id
+            ]);
+            
+            $config = $result['DistributionConfig'];
+            $etag = $result['ETag'];
+            
+            // 2. Buscar y eliminar el behavior
+            if (!isset($config['CacheBehaviors']['Items'])) {
+                error_log('StaticForge CloudFront: No hay behaviors para eliminar');
+                return false;
+            }
+            
+            $new_behaviors = [];
+            $found = false;
+            
+            foreach ($config['CacheBehaviors']['Items'] as $behavior) {
+                if ($behavior['PathPattern'] !== $path_pattern) {
+                    $new_behaviors[] = $behavior;
+                } else {
+                    $found = true;
+                    error_log('StaticForge CloudFront: Behavior encontrado y marcado para eliminación: ' . $path_pattern);
+                }
+            }
+            
+            if (!$found) {
+                error_log('StaticForge CloudFront: Behavior no encontrado: ' . $path_pattern);
+                return false;
+            }
+            
+            // 3. Actualizar la configuración
+            $config['CacheBehaviors']['Items'] = $new_behaviors;
+            $config['CacheBehaviors']['Quantity'] = count($new_behaviors);
+            
+            // 4. Enviar actualización a CloudFront
+            $update_result = $this->cloudfront_client->updateDistribution([
+                'Id' => $this->distribution_id,
+                'DistributionConfig' => $config,
+                'IfMatch' => $etag
+            ]);
+            
+            error_log('StaticForge CloudFront: Behavior eliminado exitosamente: ' . $path_pattern);
+            
+            // 5. Invalidar cache para ese path
+            $this->create_invalidation([$path_pattern, $path_pattern . '/*']);
+            
+            return true;
+            
+        } catch (\Exception $e) {
+            error_log('StaticForge CloudFront: Error eliminando behavior: ' . $e->getMessage());
             return false;
         }
     }

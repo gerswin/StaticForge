@@ -1,0 +1,37 @@
+# Archivos de desarrollo
+.git/
+.github/
+.gitignore
+.distignore
+composer.json
+composer.lock
+
+# Archivos de testing
+tests/
+phpunit.xml
+.phpunit.result.cache
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+*.log
+
+# Archivos temporales
+*.tmp
+*.bak
+*~
+
+# Node modules (si los usas)
+node_modules/
+package.json
+package-lock.json
+
+# Archivos de editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Archivos de WordPress development
+wp-config-local.php
+local-config.php
