@@ -264,5 +264,45 @@ if (!function_exists('submit_button')) {
     }
 }
 
+if (!function_exists('register_activation_hook')) {
+    function register_activation_hook($file, $function) {
+        // Mock implementation for testing
+    }
+}
+
+// Mock global $wpdb for testing
+if (!isset($GLOBALS['wpdb'])) {
+    $GLOBALS['wpdb'] = new class {
+        public $prefix = 'wp_';
+        
+        public function get_charset_collate() {
+            return 'DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci';
+        }
+        
+        public function replace($table, $data, $format) {
+            return true;
+        }
+        
+        public function get_row($query, $output = OBJECT, $y = 0) {
+            return array(
+                'page_id' => 1,
+                'generated_url' => 'http://example.com/static/test-page.html',
+                'storage_type' => 'local',
+                'generated_at' => date('Y-m-d H:i:s')
+            );
+        }
+        
+        public function prepare($query, ...$args) {
+            return $query;
+        }
+    };
+}
+
+if (!function_exists('current_time')) {
+    function current_time($type = 'mysql', $gmt = 0) {
+        return date('Y-m-d H:i:s');
+    }
+}
+
 // Load the plugin file
 require_once dirname(__FILE__) . '/../static-page-generator.php';

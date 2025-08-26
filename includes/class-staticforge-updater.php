@@ -99,10 +99,19 @@ class StaticForge_Updater {
             $this->github_repo
         );
         
+        $headers = array(
+            'Accept' => 'application/vnd.github.v3+json',
+            'User-Agent' => 'StaticForge-Updater/' . $this->version,
+        );
+
+        // Permitir token para evitar rate limit o repos privados
+        $token = defined('STATICFORGE_GITHUB_TOKEN') ? constant('STATICFORGE_GITHUB_TOKEN') : get_option('spg_github_token');
+        if (!empty($token)) {
+            $headers['Authorization'] = 'token ' . $token;
+        }
+
         $response = wp_remote_get($url, array(
-            'headers' => array(
-                'Accept' => 'application/vnd.github.v3+json',
-            ),
+            'headers' => $headers,
             'timeout' => 10,
         ));
         
@@ -195,17 +204,34 @@ class StaticForge_Updater {
      */
     public function rename_github_folder($source, $remote_source, $upgrader) {
         global $wp_filesystem;
-        
-        if (strpos($source, 'github.com') === false) {
+
+        // Asegurar que solo afectamos a este plugin
+        if (!isset($upgrader->skin) || empty($upgrader->skin->plugin) || $upgrader->skin->plugin !== $this->plugin_slug) {
             return $source;
         }
-        
-        $corrected_source = trailingslashit($remote_source) . dirname($this->plugin_slug) . '/';
-        
-        if ($wp_filesystem->move($source, $corrected_source, true)) {
-            return $corrected_source;
+
+        $expected_dir = dirname($this->plugin_slug); // nombre de carpeta del plugin
+        $source_basename = basename(untrailingslashit($source));
+
+        // Si ya coincide, no hacer nada
+        if ($source_basename === $expected_dir) {
+            return $source;
         }
-        
+
+        // Directorio destino con el nombre esperado junto al source actual
+        $destination = trailingslashit(dirname($source)) . $expected_dir . '/';
+
+        // Si existe, intentar eliminar para evitar conflictos
+        if ($wp_filesystem->is_dir($destination)) {
+            $wp_filesystem->delete($destination, true);
+        }
+
+        // Renombrar/mover la carpeta descomprimida al nombre correcto
+        if ($wp_filesystem->move($source, $destination, true)) {
+            return $destination;
+        }
+
+        // En caso de fallo, devolver el original
         return $source;
     }
     
