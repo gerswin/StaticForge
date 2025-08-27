@@ -272,8 +272,8 @@ class StaticPageGenerator {
                                 // Si CloudFront está configurado, mostrar también esa URL
                                 if ($this->cloudfront_configured()) {
                                     $cloudfront_manager = new CloudFrontManager();
-                                    $page_slug = ($page->ID == 0) ? 'home' : $page->post_name;
-                                    $cf_url = $cloudfront_manager->get_cloudfront_url('/' . $page_slug);
+                                    $page_slug = $this->get_page_slug($page->ID);
+                                    $cf_url = $page_slug ? $cloudfront_manager->get_cloudfront_url('/' . $page_slug) : false;
                                     if ($cf_url): ?>
                                         <br>
                                         <a href="<?php echo esc_url($cf_url); ?>" target="_blank" class="generated-link" title="Ver en CloudFront">
@@ -708,15 +708,12 @@ class StaticPageGenerator {
         $upload_dir = wp_upload_dir();
         $base_folder = $upload_dir['basedir'] . '/static-pages/';
         
-        // Si es ID 0, es la página home
-        if ($page_id == 0) {
-            $page_slug = 'home';
-        } else {
-            $page = get_post($page_id);
-            $page_slug = $page->post_name;
+        // Calcular path relativo completo (soporta jerarquías)
+        $page_slug = $this->get_page_slug($page_id);
+        if (!$page_slug) {
+            $page_slug = 'page';
         }
-        
-        $page_folder = $base_folder . $page_slug . '/';
+        $page_folder = trailingslashit($base_folder . $page_slug) ;
         
         if (!file_exists($page_folder)) {
             wp_mkdir_p($page_folder);
@@ -760,20 +757,14 @@ class StaticPageGenerator {
                 ],
             ]);
             
-            // Obtener slug de la página de forma tolerante
-            if ($page_id === 0) {
-                $page_slug = 'home';
-            } else {
-                $page = is_numeric($page_id) ? get_post(intval($page_id)) : null;
-                if ($page && isset($page->post_name) && $page->post_name) {
-                    $page_slug = $page->post_name;
-                } else {
-                    // Fallback: derivar slug del título
-                    $page_slug = sanitize_title($page_title ?: 'page');
-                }
+            // Obtener path relativo completo (soporta jerarquías)
+            $page_slug = $this->get_page_slug($page_id);
+            if (!$page_slug) {
+                // Fallback: derivar del título si no se puede resolver
+                $page_slug = sanitize_title($page_title ?: 'page');
             }
             
-            $key_index = $page_slug . '/index.html';
+            $key_index = rtrim($page_slug, '/') . '/index.html';
             
             // Subir SOLO index.html (CloudFront Function maneja las redirecciones)
             $s3->putObject([
@@ -969,8 +960,8 @@ class StaticPageGenerator {
         
         $cloudfront_manager = new CloudFrontManager();
         
-        // Crear path pattern basado en el slug
-        $path_pattern = '/' . $page_slug;
+        // Crear path pattern basado en el path completo (p.ej. /seguros/arl)
+        $path_pattern = '/' . ltrim($page_slug, '/');
         
         // Crear behavior SIN sobrescribir el contenido existente
         // El tercer parámetro indica que NO debe crear placeholder
@@ -991,12 +982,25 @@ class StaticPageGenerator {
     }
     
     private function get_page_slug($page_id) {
+        // Devuelve el path relativo completo (soporta jerarquías), o 'home' para el inicio
         if ($page_id == 0) {
             return 'home';
         }
         
+        // Obtener permalink y extraer path
+        $permalink = get_permalink($page_id);
+        if ($permalink) {
+            $path = wp_parse_url($permalink, PHP_URL_PATH);
+            $path = trim($path, '/');
+            if ($path === '') {
+                return 'home';
+            }
+            return $path;
+        }
+        
+        // Fallback a post_name si no hay permalink
         $page = get_post($page_id);
-        return $page ? $page->post_name : false;
+        return ($page && isset($page->post_name)) ? $page->post_name : false;
     }
     
     private function save_cloudfront_behavior_status($page_id, $status, $path_pattern) {
