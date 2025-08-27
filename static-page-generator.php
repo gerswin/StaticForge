@@ -273,7 +273,8 @@ class StaticPageGenerator {
                                 if ($this->cloudfront_configured()) {
                                     $cloudfront_manager = new CloudFrontManager();
                                     $page_slug = $this->get_page_slug($page->ID);
-                                    $cf_url = $page_slug ? $cloudfront_manager->get_cloudfront_url('/' . $page_slug) : false;
+                                    $cf_path = ($page->ID == 0 || $page_slug === 'home') ? '/' : '/' . ltrim($page_slug, '/');
+                                    $cf_url = $cloudfront_manager->get_cloudfront_url($cf_path);
                                     if ($cf_url): ?>
                                         <br>
                                         <a href="<?php echo esc_url($cf_url); ?>" target="_blank" class="generated-link" title="Ver en CloudFront">
@@ -948,6 +949,12 @@ class StaticPageGenerator {
             error_log('StaticForge: CloudFront no configurado');
             return false;
         }
+
+        // Para la Home (ID 0) no se crea behavior específico; usa el default de la distribución
+        if ($page_id == 0) {
+            error_log('StaticForge: Saltando creación de behavior para Home (usa default behavior)');
+            return true;
+        }
         
         // Obtener slug de la página
         $page_slug = $this->get_page_slug($page_id);
@@ -1023,6 +1030,15 @@ class StaticPageGenerator {
     private function get_page_cloudfront_status($page_id) {
         if (!$this->cloudfront_configured()) {
             return false;
+        }
+
+        // Home usa el behavior por defecto de la distribución
+        if ($page_id == 0) {
+            return array(
+                'status' => 'default',
+                'icon' => '🌐',
+                'text' => 'Default behavior'
+            );
         }
         
         global $wpdb;
