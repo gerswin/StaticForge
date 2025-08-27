@@ -117,6 +117,11 @@ Contribuciones son bienvenidas.
 - CloudFront: eliminación múltiple de behaviors en una sola operación (UI con checkboxes y eliminación consolidada).
 - SDK: `delete_behaviors_bulk` actualiza la distribución e invalida todos los paths en un único batch.
 
+### v1.3.5
+- CloudFront (UI): listado de behaviors a eliminar muestra solo los que apuntan a `StaticS3Origin`.
+- Panel principal: el enlace a CloudFront se muestra solo si es Home o hay behavior activo para esa página.
+- Al eliminar behavior(es), se limpia el estado interno para que el listado deje de mostrar el enlace CF.
+
 ### v1.3.0
 - Selección de post types habilitados para generación estática (configurable en Configuración S3).
 - Panel con filtros por estado (Publicados, Borradores, etc.) y paginación con tamaño por página.

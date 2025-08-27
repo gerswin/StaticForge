@@ -2,7 +2,7 @@
 /**
  * Plugin Name: StaticForge
  * Description: Convierte WP en HTML sólido
- * Version: 1.3.4
+ * Version: 1.3.5
  * Author: Gerswin Pineda
  * Update URI: https://github.com/gerswin/StaticForge
  * Requires at least: 6.0
@@ -312,18 +312,23 @@ class StaticPageGenerator {
                                         📦 S3
                                     </a>
                                     <?php 
-                                    // Mostrar CloudFront solo si está configurado y el origen es S3
+                                    // Mostrar CloudFront solo si está configurado y hay behavior activo (o si es Home)
                                     if ($this->cloudfront_configured()) {
-                                        $cloudfront_manager = new CloudFrontManager();
-                                        $page_slug = $this->get_page_slug($page->ID);
-                                        $cf_path = ($page->ID == 0 || $page_slug === 'home') ? '/' : '/' . ltrim($page_slug, '/');
-                                        $cf_url = $cloudfront_manager->get_cloudfront_url($cf_path);
-                                        if ($cf_url): ?>
-                                            <br>
-                                            <a href="<?php echo esc_url($cf_url); ?>" target="_blank" class="generated-link" title="Ver en CloudFront">
-                                                ☁️ CloudFront
-                                            </a>
-                                        <?php endif; 
+                                        $cloudfront_status_for_link = $this->get_page_cloudfront_status($page->ID);
+                                        $is_home = ($page->ID == 0);
+                                        $has_active_behavior = ($cloudfront_status_for_link && isset($cloudfront_status_for_link['status']) && $cloudfront_status_for_link['status'] === 'active');
+                                        if ($is_home || $has_active_behavior) {
+                                            $cloudfront_manager = new CloudFrontManager();
+                                            $page_slug = $this->get_page_slug($page->ID);
+                                            $cf_path = $is_home || $page_slug === 'home' ? '/' : '/' . ltrim($page_slug, '/');
+                                            $cf_url = $cloudfront_manager->get_cloudfront_url($cf_path);
+                                            if ($cf_url): ?>
+                                                <br>
+                                                <a href="<?php echo esc_url($cf_url); ?>" target="_blank" class="generated-link" title="Ver en CloudFront">
+                                                    ☁️ CloudFront
+                                                </a>
+                                            <?php endif; 
+                                        }
                                     }
                                     ?>
                                 <?php endif; ?>
@@ -1452,6 +1457,12 @@ class StaticPageGenerator {
             <?php 
             $cfm = new CloudFrontManager();
             $behaviors = $cfm->get_all_behaviors();
+            // Filtrar solo behaviors cuyo TargetOriginId sea StaticS3Origin
+            if (is_array($behaviors)) {
+                $behaviors = array_values(array_filter($behaviors, function($b){
+                    return isset($b['TargetOriginId']) && $b['TargetOriginId'] === 'StaticS3Origin';
+                }));
+            }
             if (is_array($behaviors) && !empty($behaviors)):
             ?>
             <form method="post" action="" style="margin:12px 0;">
@@ -1562,9 +1573,22 @@ class StaticPageGenerator {
         $cfm = new CloudFrontManager();
         $ok = $cfm->delete_behaviors_bulk($paths);
         if ($ok) {
+            // Limpiar estado interno para que el listado no muestre CF en esas páginas
+            $this->remove_cloudfront_behavior_status_by_paths($paths);
             echo '<div class="notice notice-success"><p>✅ Behaviors eliminados: ' . esc_html(count($paths)) . '</p></div>';
         } else {
             echo '<div class="notice notice-error"><p>❌ Error al eliminar behaviors seleccionados.</p></div>';
+        }
+    }
+
+    private function remove_cloudfront_behavior_status_by_paths($paths) {
+        if (!is_array($paths) || empty($paths)) { return; }
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'staticforge_cloudfront';
+        foreach ($paths as $pp) {
+            $pp = sanitize_text_field($pp);
+            if ($pp === '') continue;
+            $wpdb->delete($table_name, array('path_pattern' => $pp), array('%s'));
         }
     }
     
@@ -1706,6 +1730,8 @@ class StaticPageGenerator {
         $result = $cloudfront_manager->delete_behavior($path_pattern);
         
         if ($result) {
+            // Limpiar estado interno para que el listado no muestre CF en esa página
+            $this->remove_cloudfront_behavior_status_by_paths(array($path_pattern));
             echo '<div class="notice notice-success"><p>✅ Behavior ' . esc_html($path_pattern) . ' eliminado exitosamente</p></div>';
         } else {
             echo '<div class="notice notice-error"><p>❌ Error al eliminar behavior ' . esc_html($path_pattern) . '</p></div>';
