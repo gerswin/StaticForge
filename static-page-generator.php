@@ -2,7 +2,7 @@
 /**
  * Plugin Name: StaticForge
  * Description: Convierte WP en HTML sólido
- * Version: 1.2.2
+ * Version: 1.3.0
  * Author: Gerswin Pineda
  * Update URI: https://github.com/gerswin/StaticForge
  * Requires at least: 6.0
@@ -107,7 +107,37 @@ class StaticPageGenerator {
     }
     
     public function admin_page() {
-        $pages = get_pages();
+        // Obtener tipos de contenido habilitados para StaticForge
+        $enabled_post_types = $this->get_enabled_post_types();
+
+        // Filtros: estado y paginación
+        $status_filter = isset($_GET['spg_status']) ? sanitize_key($_GET['spg_status']) : 'publish';
+        $allowed_status = array('all', 'publish', 'draft', 'pending', 'private');
+        if (!in_array($status_filter, $allowed_status, true)) {
+            $status_filter = 'publish';
+        }
+        $statuses = ($status_filter === 'all') ? array('publish', 'draft', 'pending', 'private') : array($status_filter);
+
+        $per_page = isset($_GET['spg_per_page']) ? intval($_GET['spg_per_page']) : 20;
+        if ($per_page < 1) { $per_page = 20; }
+        if ($per_page > 200) { $per_page = 200; }
+        $paged = isset($_GET['spg_paged']) ? max(1, intval($_GET['spg_paged'])) : 1;
+
+        // Query con conteo para paginar
+        $query_args = array(
+            'post_type'           => $enabled_post_types,
+            'post_status'         => $statuses,
+            'posts_per_page'      => $per_page,
+            'paged'               => $paged,
+            'orderby'             => 'date',
+            'order'               => 'DESC',
+            'ignore_sticky_posts' => true,
+            'no_found_rows'       => false,
+        );
+        $q = new WP_Query($query_args);
+        $pages = $q->posts;
+        $found_posts = intval($q->found_posts);
+        $max_pages = max(1, intval($q->max_num_pages));
         
         // Agregar página home si está configurada
         $home_page_id = get_option('page_on_front');
@@ -173,6 +203,27 @@ class StaticPageGenerator {
         </style>
         <div class="wrap">
             <h1>StaticForge - Convierte WP en HTML sólido</h1>
+            <form method="get" action="" style="margin: 12px 0;">
+                <input type="hidden" name="page" value="static-page-generator" />
+                <label style="margin-right:8px;">Estado:
+                    <select name="spg_status">
+                        <option value="publish" <?php selected($status_filter, 'publish'); ?>>Publicados</option>
+                        <option value="draft" <?php selected($status_filter, 'draft'); ?>>Borradores</option>
+                        <option value="pending" <?php selected($status_filter, 'pending'); ?>>Pendientes</option>
+                        <option value="private" <?php selected($status_filter, 'private'); ?>>Privados</option>
+                        <option value="all" <?php selected($status_filter, 'all'); ?>>Todos</option>
+                    </select>
+                </label>
+                <label style="margin-right:8px;">Por página:
+                    <select name="spg_per_page">
+                        <?php foreach (array(10,20,50,100,200) as $opt): ?>
+                            <option value="<?php echo esc_attr($opt); ?>" <?php selected($per_page, $opt); ?>><?php echo esc_html($opt); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+                <button type="submit" class="button">Filtrar</button>
+                <a href="<?php echo esc_url(admin_url('admin.php?page=static-page-generator')); ?>" class="button-link" style="margin-left:8px;">Limpiar filtros</a>
+            </form>
             <table class="wp-list-table widefat fixed striped">
                 <thead>
                     <tr>
@@ -259,6 +310,41 @@ class StaticPageGenerator {
                     <?php endforeach; ?>
                 </tbody>
             </table>
+            <?php 
+            // Paginación simple
+            $base_url = admin_url('admin.php?page=static-page-generator');
+            $base_url = add_query_arg(array(
+                'spg_status'   => $status_filter,
+                'spg_per_page' => $per_page,
+            ), $base_url);
+
+            $prev_url = $paged > 1 ? add_query_arg('spg_paged', $paged - 1, $base_url) : '';
+            $next_url = $paged < $max_pages ? add_query_arg('spg_paged', $paged + 1, $base_url) : '';
+
+            $range_start = ($paged - 1) * $per_page + 1;
+            $current_count = count($q->posts);
+            $range_end = min($range_start + $current_count - 1, $found_posts);
+            ?>
+            <div class="tablenav bottom" style="margin-top:10px;">
+                <div class="tablenav-pages">
+                    <span class="displaying-num">Mostrando <?php echo esc_html($found_posts ? $range_start : 0); ?>–<?php echo esc_html($found_posts ? $range_end : 0); ?> de <?php echo esc_html($found_posts); ?></span>
+                    <span class="pagination-links" style="margin-left:10px;">
+                        <?php if ($prev_url): ?>
+                            <a class="prev-page button" href="<?php echo esc_url($prev_url); ?>">« Anterior</a>
+                        <?php else: ?>
+                            <span class="tablenav-pages-navspan button disabled">« Anterior</span>
+                        <?php endif; ?>
+                        <span class="paging-input" style="margin:0 8px;">
+                            Página <?php echo esc_html($paged); ?> de <span class="total-pages"><?php echo esc_html($max_pages); ?></span>
+                        </span>
+                        <?php if ($next_url): ?>
+                            <a class="next-page button" href="<?php echo esc_url($next_url); ?>">Siguiente »</a>
+                        <?php else: ?>
+                            <span class="tablenav-pages-navspan button disabled">Siguiente »</span>
+                        <?php endif; ?>
+                    </span>
+                </div>
+            </div>
         </div>
         
         <script>
@@ -348,6 +434,16 @@ class StaticPageGenerator {
         if (isset($_POST['cloudfront_prefix'])) {
             update_option('spg_cloudfront_prefix', sanitize_text_field($_POST['cloudfront_prefix']));
         }
+        // Tipos de contenido habilitados
+        $received_types = isset($_POST['spg_enabled_post_types']) ? (array) $_POST['spg_enabled_post_types'] : array();
+        $sanitized = array();
+        foreach ($received_types as $ptype) {
+            $ptype = sanitize_key($ptype);
+            if (post_type_exists($ptype)) {
+                $sanitized[] = $ptype;
+            }
+        }
+        update_option('spg_enabled_post_types', $sanitized);
             echo '<div class="notice notice-success"><p>Configuración guardada correctamente.</p></div>';
         }
         
@@ -357,22 +453,41 @@ class StaticPageGenerator {
         $s3_region = get_option('spg_s3_region', 'us-east-1');
         $cloudfront_distribution_id = get_option('spg_cloudfront_distribution_id', '');
         $cloudfront_prefix = get_option('spg_cloudfront_prefix', '');
+        $enabled_post_types = get_option('spg_enabled_post_types', array('page'));
+        if (!is_array($enabled_post_types)) { $enabled_post_types = array('page'); }
+        // Obtener post types públicos y con UI para listarlos como checkboxes
+        $public_types = get_post_types(array('public' => true, 'show_ui' => true), 'objects');
+        // Excluir adjuntos u objetos no útiles
+        unset($public_types['attachment']);
+        $offline_mode = !$this->s3_credentials_configured();
         ?>
         <div class="wrap">
             <h1>Configuración de S3</h1>
+            <?php if ($offline_mode): ?>
+                <div class="notice notice-warning"><p>⚠️ Modo offline activo: Sin credenciales de S3, los HTML se guardarán localmente en <code>uploads/static-pages/</code>. Completa las credenciales para subir a S3 e integrar con CloudFront.</p></div>
+            <?php endif; ?>
             <form method="post" action="">
                 <table class="form-table">
                     <tr>
                         <th scope="row">AWS Access Key</th>
-                        <td><input type="text" name="aws_access_key" value="<?php echo esc_attr($aws_access_key); ?>" class="regular-text" required /></td>
+                        <td>
+                            <input type="text" name="aws_access_key" value="<?php echo esc_attr($aws_access_key); ?>" class="regular-text" />
+                            <p class="description">Opcional para pruebas offline. Déjalo vacío para generar localmente.</p>
+                        </td>
                     </tr>
                     <tr>
                         <th scope="row">AWS Secret Key</th>
-                        <td><input type="password" name="aws_secret_key" value="<?php echo esc_attr($aws_secret_key); ?>" class="regular-text" required /></td>
+                        <td>
+                            <input type="password" name="aws_secret_key" value="<?php echo esc_attr($aws_secret_key); ?>" class="regular-text" />
+                            <p class="description">Opcional para pruebas offline. Cuando falten credenciales, no se sube a S3.</p>
+                        </td>
                     </tr>
                     <tr>
                         <th scope="row">Bucket de S3</th>
-                        <td><input type="text" name="s3_bucket" value="<?php echo esc_attr($s3_bucket); ?>" class="regular-text" required /></td>
+                        <td>
+                            <input type="text" name="s3_bucket" value="<?php echo esc_attr($s3_bucket); ?>" class="regular-text" />
+                            <p class="description">Opcional para pruebas offline. Requerido solo si vas a usar S3.</p>
+                        </td>
                     </tr>
                     <tr>
                         <th scope="row">Región de S3</th>
@@ -408,6 +523,22 @@ class StaticPageGenerator {
                                    class="regular-text" 
                                    placeholder="prod/" />
                             <p class="description">Prefijo para organizar archivos en S3 por entorno</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Tipos de contenido</th>
+                        <td>
+                            <?php if (!empty($public_types)): ?>
+                                <?php foreach ($public_types as $ptype => $obj): ?>
+                                    <label style="display:inline-block; margin: 4px 12px 4px 0;">
+                                        <input type="checkbox" name="spg_enabled_post_types[]" value="<?php echo esc_attr($ptype); ?>" <?php checked(in_array($ptype, $enabled_post_types, true)); ?> />
+                                        <?php echo esc_html($obj->labels->name); ?> <code style="color:#666;">(<?php echo esc_html($ptype); ?>)</code>
+                                    </label>
+                                <?php endforeach; ?>
+                                <p class="description">Selecciona los post types que podrán forjarse a estático y aparecerán en la lista.</p>
+                            <?php else: ?>
+                                <em>No se encontraron tipos de contenido públicos.</em>
+                            <?php endif; ?>
                         </td>
                     </tr>
                 </table>
@@ -674,7 +805,9 @@ class StaticPageGenerator {
     }
     
     public function handle_page_update($post_id, $post_after, $post_before) {
-        if ($post_after->post_type !== 'page') {
+        // Solo actuar para los post types habilitados
+        $enabled = $this->get_enabled_post_types();
+        if (!in_array($post_after->post_type, $enabled, true)) {
             return;
         }
         
@@ -708,6 +841,17 @@ class StaticPageGenerator {
                 $this->save_generation_data($post_id, $temp_url, 'local');
             }
         }
+    }
+
+    private function get_enabled_post_types() {
+        $enabled = get_option('spg_enabled_post_types', array('page'));
+        if (!is_array($enabled) || empty($enabled)) {
+            $enabled = array('page');
+        }
+        // Validar que aún existan
+        $enabled = array_values(array_filter($enabled, function ($pt) { return post_type_exists($pt); }));
+        // Si nada sobrevivió, fallback a page
+        return !empty($enabled) ? $enabled : array('page');
     }
     
     public function create_tracking_table() {
@@ -1219,7 +1363,8 @@ class StaticPageGenerator {
             <h2>Actualizaciones</h2>
             <p>
                 <a href="<?php echo add_query_arg('force-check', '1'); ?>" class="button">🔄 Verificar Actualizaciones</a>
-                <span style="margin-left: 10px; color: #666;">Versión actual: <strong>1.1</strong></span>
+                <?php $plugin_data = get_file_data(__FILE__, array('Version' => 'Version')); ?>
+                <span style="margin-left: 10px; color: #666;">Versión actual: <strong><?php echo esc_html($plugin_data['Version']); ?></strong></span>
             </p>
             
             <h2>Logs Recientes</h2>

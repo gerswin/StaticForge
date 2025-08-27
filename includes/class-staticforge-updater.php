@@ -64,7 +64,7 @@ class StaticForge_Updater {
                     '2x' => 'https://raw.githubusercontent.com/' . $this->github_username . '/' . $this->github_repo . '/main/assets/icon-256x256.png',
                     '1x' => 'https://raw.githubusercontent.com/' . $this->github_username . '/' . $this->github_repo . '/main/assets/icon-128x128.png',
                 ),
-                'tested' => '6.4', // Versión de WP testeada
+                'tested' => '6.6', // Versión de WP testeada
                 'requires_php' => '7.4',
                 'compatibility' => new stdClass(),
             );

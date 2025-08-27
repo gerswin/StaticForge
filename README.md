@@ -99,6 +99,12 @@ Contribuciones son bienvenidas.
 
 ## 📝 Changelog
 
+### v1.3.0
+- Selección de post types habilitados para generación estática (configurable en Configuración S3).
+- Panel con filtros por estado (Publicados, Borradores, etc.) y paginación con tamaño por página.
+- Configuración S3 permite modo offline (guardar sin credenciales); aviso visible cuando está activo.
+- Mejoras UX: versión actual dinámica en Debug, mensajes y ayudas en formularios.
+
 ### v1.2.0
 - Auto‑updater del plugin vía GitHub Releases (con soporte de token y headers adecuados).
 - Gestión de CloudFront: behaviors por path, invalidaciones y estado de distribución.
