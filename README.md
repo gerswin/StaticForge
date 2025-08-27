@@ -108,6 +108,11 @@ Contribuciones son bienvenidas.
 - CloudFront: behaviors basados en `/<path>` y `/<path>/*`.
 - Panel: enlaces CloudFront calculados con path completo.
 
+### v1.3.3
+- Regeneración condicional por hash (SHA‑256): evita subir/invalidar cuando no hay cambios.
+- UI: columna "Resultado" con badges para "Actualizado", "Sin cambios" y "Error".
+- Bulk: omite paths sin cambios en la actualización única de CloudFront.
+
 ### v1.3.0
 - Selección de post types habilitados para generación estática (configurable en Configuración S3).
 - Panel con filtros por estado (Publicados, Borradores, etc.) y paginación con tamaño por página.

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: StaticForge
  * Description: Convierte WP en HTML sólido
- * Version: 1.3.2
+ * Version: 1.3.3
  * Author: Gerswin Pineda
  * Update URI: https://github.com/gerswin/StaticForge
  * Requires at least: 6.0
@@ -37,7 +37,9 @@ class StaticPageGenerator {
     public function __construct() {
         add_action('admin_menu', array($this, 'add_admin_menu'));
         add_action('wp_ajax_generate_static_page', array($this, 'generate_static_page'));
+        add_action('wp_ajax_generate_static_bulk', array($this, 'generate_static_bulk'));
         add_action('wp_ajax_toggle_autoupdate', array($this, 'toggle_autoupdate'));
+        add_action('wp_ajax_toggle_autoupdate_bulk', array($this, 'toggle_autoupdate_bulk'));
         add_action('wp_ajax_test_s3_connection', array($this, 'test_s3_connection'));
         add_action('wp_ajax_test_cloudfront_behavior', array($this, 'test_cloudfront_behavior'));
         add_action('admin_enqueue_scripts', array($this, 'enqueue_scripts'));
@@ -200,9 +202,23 @@ class StaticPageGenerator {
             color: #999;
             font-style: italic;
         }
+        .badge { display:inline-block; padding:1px 6px; border-radius:10px; font-size:11px; line-height:1.6; }
+        .badge-ok { background:#e7f7ed; color:#198754; }
+        .badge-nochange { background:#eef1f2; color:#50575e; }
+        .badge-error { background:#fde7e9; color:#d63638; }
         </style>
         <div class="wrap">
             <h1>StaticForge - Convierte WP en HTML sólido</h1>
+            <div style="margin:10px 0;">
+                <button id="spg-generate-selected" class="button button-primary">🔨 Forjar seleccionados</button>
+                <span class="spinner" id="spg-bulk-spinner" style="float:none;"></span>
+                <span id="spg-bulk-message" style="margin-left:8px;"></span>
+                <span style="margin:0 12px;">|</span>
+                <button id="spg-autoupdate-on" class="button">⚡ Activar Auto-update</button>
+                <button id="spg-autoupdate-off" class="button">⏸️ Desactivar Auto-update</button>
+                <span class="spinner" id="spg-bulk-au-spinner" style="float:none;"></span>
+                <span id="spg-bulk-au-message" style="margin-left:8px;"></span>
+            </div>
             <form method="get" action="" style="margin: 12px 0;">
                 <input type="hidden" name="page" value="static-page-generator" />
                 <label style="margin-right:8px;">Estado:
@@ -227,9 +243,11 @@ class StaticPageGenerator {
             <table class="wp-list-table widefat fixed striped">
                 <thead>
                     <tr>
+                        <th style="width:36px; text-align:center;"><input type="checkbox" id="spg-select-all" /></th>
                         <th>Título</th>
                         <th>URL</th>
                         <th>Estado</th>
+                        <th>Resultado</th>
                         <th>Auto-update</th>
                         <th>Última Generación</th>
                         <th>URL Generada</th>
@@ -244,14 +262,37 @@ class StaticPageGenerator {
                         $generation_data = $this->get_generation_data($page->ID);
                     ?>
                     <tr>
+                        <td style="text-align:center;"><input type="checkbox" class="spg-select" data-page-id="<?php echo $page->ID; ?>" /></td>
                         <td><?php echo esc_html($page->post_title); ?></td>
                         <td><?php echo $page_url; ?></td>
                         <td><?php echo ucfirst($page->post_status); ?></td>
                         <td>
-                            <input type="checkbox" 
-                                   class="autoupdate-checkbox" 
-                                   data-page-id="<?php echo $page->ID; ?>"
-                                   <?php checked($autoupdate_enabled, '1'); ?> />
+                            <?php 
+                            if ($page->ID == 0) {
+                                $last_result = get_option('spg_home_last_result', '');
+                            } else {
+                                $last_result = get_post_meta($page->ID, 'spg_last_result', true);
+                            }
+                            if ($last_result === 'nochange') {
+                                echo '<span class="badge badge-nochange" title="Última ejecución: sin cambios">Sin cambios</span>';
+                            } elseif ($last_result === 'ok') {
+                                echo '<span class="badge badge-ok" title="Última ejecución correcta">Actualizado</span>';
+                            } elseif ($last_result === 'error') {
+                                echo '<span class="badge badge-error" title="Última ejecución con error">Error</span>';
+                            } else {
+                                echo '<span class="dashicons dashicons-minus"></span>';
+                            }
+                            ?>
+                        </td>
+                        <td>
+                            <?php if ($page->ID == 0): ?>
+                                <span title="No aplica para Home cuando no hay página estática">—</span>
+                            <?php else: ?>
+                                <input type="checkbox" 
+                                       class="autoupdate-checkbox" 
+                                       data-page-id="<?php echo $page->ID; ?>"
+                                       <?php checked($autoupdate_enabled, '1'); ?> />
+                            <?php endif; ?>
                         </td>
                         <td>
                             <?php if ($generation_data): ?>
@@ -261,28 +302,31 @@ class StaticPageGenerator {
                             <?php endif; ?>
                         </td>
                         <td>
-                            <?php if ($generation_data && $generation_data['generated_url']): ?>
-                                <?php 
-                                // Mostrar URL de S3
-                                ?>
-                                <a href="<?php echo esc_url($generation_data['generated_url']); ?>" target="_blank" class="generated-link" title="Ver en S3">
-                                    📦 S3
-                                </a>
-                                <?php 
-                                // Si CloudFront está configurado, mostrar también esa URL
-                                if ($this->cloudfront_configured()) {
-                                    $cloudfront_manager = new CloudFrontManager();
-                                    $page_slug = $this->get_page_slug($page->ID);
-                                    $cf_path = ($page->ID == 0 || $page_slug === 'home') ? '/' : '/' . ltrim($page_slug, '/');
-                                    $cf_url = $cloudfront_manager->get_cloudfront_url($cf_path);
-                                    if ($cf_url): ?>
-                                        <br>
-                                        <a href="<?php echo esc_url($cf_url); ?>" target="_blank" class="generated-link" title="Ver en CloudFront">
-                                            ☁️ CloudFront
-                                        </a>
-                                    <?php endif;
-                                }
-                                ?>
+                            <?php if ($generation_data && !empty($generation_data['generated_url'])): ?>
+                                <?php if (!empty($generation_data['storage_type']) && $generation_data['storage_type'] === 'local'): ?>
+                                    <a href="<?php echo esc_url($generation_data['generated_url']); ?>" target="_blank" class="generated-link" title="Ver archivo local">
+                                        📄 Local
+                                    </a>
+                                <?php else: ?>
+                                    <a href="<?php echo esc_url($generation_data['generated_url']); ?>" target="_blank" class="generated-link" title="Ver en S3">
+                                        📦 S3
+                                    </a>
+                                    <?php 
+                                    // Mostrar CloudFront solo si está configurado y el origen es S3
+                                    if ($this->cloudfront_configured()) {
+                                        $cloudfront_manager = new CloudFrontManager();
+                                        $page_slug = $this->get_page_slug($page->ID);
+                                        $cf_path = ($page->ID == 0 || $page_slug === 'home') ? '/' : '/' . ltrim($page_slug, '/');
+                                        $cf_url = $cloudfront_manager->get_cloudfront_url($cf_path);
+                                        if ($cf_url): ?>
+                                            <br>
+                                            <a href="<?php echo esc_url($cf_url); ?>" target="_blank" class="generated-link" title="Ver en CloudFront">
+                                                ☁️ CloudFront
+                                            </a>
+                                        <?php endif; 
+                                    }
+                                    ?>
+                                <?php endif; ?>
                             <?php else: ?>
                                 <span class="no-url">-</span>
                             <?php endif; ?>
@@ -350,6 +394,95 @@ class StaticPageGenerator {
         
         <script>
         jQuery(document).ready(function($) {
+            // Seleccionar/Deseleccionar todos
+            $('#spg-select-all').on('change', function() {
+                $('.spg-select').prop('checked', $(this).is(':checked'));
+            });
+
+            // Forjar seleccionados (bulk)
+            $('#spg-generate-selected').on('click', function(e) {
+                e.preventDefault();
+                var ids = $('.spg-select:checked').map(function(){ return $(this).data('page-id'); }).get();
+                var msg = $('#spg-bulk-message');
+                var spinner = $('#spg-bulk-spinner');
+                if (ids.length === 0) {
+                    msg.html('<span style="color:#d63638;">Selecciona al menos una página.</span>');
+                    return;
+                }
+                $(this).prop('disabled', true);
+                spinner.addClass('is-active');
+                msg.text('');
+                $.ajax({
+                    url: spg_ajax.ajax_url,
+                    type: 'POST',
+                    data: {
+                        action: 'generate_static_bulk',
+                        page_ids: ids,
+                        nonce: spg_ajax.nonce
+                    },
+                    success: function(response){
+                        if (response.success) {
+                            msg.html('<span style="color: #198754;">' + response.data.message + '</span>');
+                        } else {
+                            msg.html('<span style="color:#d63638;">' + (response.data && response.data.message ? response.data.message : 'Error en la generación') + '</span>');
+                        }
+                    },
+                    error: function(xhr){
+                        msg.html('<span style="color:#d63638;">Error de comunicación ('+xhr.status+')</span>');
+                    },
+                    complete: function(){
+                        $('#spg-generate-selected').prop('disabled', false);
+                        spinner.removeClass('is-active');
+                    }
+                });
+            });
+
+            function bulkToggleAutoupdate(enable) {
+                var ids = $('.spg-select:checked').map(function(){ return $(this).data('page-id'); }).get();
+                var msg = $('#spg-bulk-au-message');
+                var spinner = $('#spg-bulk-au-spinner');
+                if (ids.length === 0) {
+                    msg.html('<span style="color:#d63638;">Selecciona al menos una página.</span>');
+                    return;
+                }
+                $('#spg-autoupdate-on, #spg-autoupdate-off').prop('disabled', true);
+                spinner.addClass('is-active');
+                msg.text('');
+                $.ajax({
+                    url: spg_ajax.ajax_url,
+                    type: 'POST',
+                    data: {
+                        action: 'toggle_autoupdate_bulk',
+                        page_ids: ids,
+                        enabled: enable ? 1 : 0,
+                        nonce: spg_ajax.autoupdate_nonce
+                    },
+                    success: function(response){
+                        if (response.success) {
+                            msg.html('<span style="color:#198754;">' + response.data.message + '</span>');
+                            // Actualizar checkboxes por fila para reflejar el cambio (excluye Home ID 0)
+                            $('.spg-select:checked').each(function(){
+                                var pid = parseInt($(this).data('page-id'), 10);
+                                if (pid > 0) {
+                                    $(this).closest('tr').find('.autoupdate-checkbox').prop('checked', enable);
+                                }
+                            });
+                        } else {
+                            msg.html('<span style="color:#d63638;">' + (response.data && response.data.message ? response.data.message : 'Error al actualizar Auto-update') + '</span>');
+                        }
+                    },
+                    error: function(xhr){
+                        msg.html('<span style="color:#d63638;">Error de comunicación ('+xhr.status+')</span>');
+                    },
+                    complete: function(){
+                        $('#spg-autoupdate-on, #spg-autoupdate-off').prop('disabled', false);
+                        spinner.removeClass('is-active');
+                    }
+                });
+            }
+
+            $('#spg-autoupdate-on').on('click', function(e){ e.preventDefault(); bulkToggleAutoupdate(true); });
+            $('#spg-autoupdate-off').on('click', function(e){ e.preventDefault(); bulkToggleAutoupdate(false); });
             $('.generate-static').on('click', function() {
                 var button = $(this);
                 var spinner = button.siblings('.spinner');
@@ -584,6 +717,15 @@ class StaticPageGenerator {
         
         error_log('StaticForge: HTML obtenido exitosamente');
         
+        // Regeneración condicional por hash
+        $new_hash = hash('sha256', $html_content);
+        $old_hash = $this->get_saved_hash($page_id);
+        if (!empty($old_hash) && hash_equals($old_hash, $new_hash)) {
+            $this->save_last_result($page_id, 'nochange');
+            wp_send_json_success(array('message' => 'Sin cambios (hash coincide)'));
+            return;
+        }
+        
         $success_message = '';
         $has_cloudfront = $this->cloudfront_configured();
         error_log('StaticForge: CloudFront configurado: ' . ($has_cloudfront ? 'SÍ' : 'NO'));
@@ -593,6 +735,8 @@ class StaticPageGenerator {
             
             if ($s3_result && isset($s3_result['success']) && $s3_result['success']) {
                 $this->save_generation_data($page_id, $s3_result['url'], 's3');
+                $this->save_hash($page_id, $new_hash);
+                $this->save_last_result($page_id, 'ok');
                 $success_message = '🔥 HTML forjado y subido a S3 correctamente';
                 
                 // Crear/actualizar behavior en CloudFront si está configurado
@@ -608,6 +752,7 @@ class StaticPageGenerator {
                 wp_send_json_success(array('message' => $success_message));
             } else {
                 $error_details = $s3_result && isset($s3_result['error']) ? $s3_result['error'] : 'Error desconocido';
+                $this->save_last_result($page_id, 'error');
                 $debug_info = '';
                 
                 if (defined('WP_DEBUG') && WP_DEBUG) {
@@ -621,6 +766,8 @@ class StaticPageGenerator {
             
             if ($temp_url) {
                 $this->save_generation_data($page_id, $temp_url, 'local');
+                $this->save_hash($page_id, $new_hash);
+                $this->save_last_result($page_id, 'ok');
                 $success_message = '🔥 HTML sólido forjado: <a href="' . esc_url($temp_url) . '" target="_blank">Ver archivo</a>';
                 
                 if ($has_cloudfront) {
@@ -632,6 +779,115 @@ class StaticPageGenerator {
                 wp_send_json_error(array('message' => '❌ Error al forjar HTML sólido'));
             }
         }
+    }
+
+    public function generate_static_bulk() {
+        if (!wp_verify_nonce($_POST['nonce'] ?? '', 'spg_nonce')) {
+            wp_die('Error de seguridad');
+        }
+        if (!current_user_can('manage_options')) {
+            wp_die('Permisos insuficientes');
+        }
+
+        $ids = isset($_POST['page_ids']) ? (array) $_POST['page_ids'] : array();
+        $page_ids = array_values(array_unique(array_map('intval', $ids)));
+        if (empty($page_ids)) {
+            wp_send_json_error(array('message' => 'No se recibieron páginas para generar'));
+        }
+
+        $results = array();
+        $paths_for_cf = array();
+        $s3_mode = $this->s3_credentials_configured();
+        $has_cloudfront = $this->cloudfront_configured();
+
+        $nochange = 0;
+        foreach ($page_ids as $pid) {
+            $title = ($pid === 0) ? 'Home' : get_the_title($pid);
+            $html = $this->get_page_html($pid);
+            if (!$html) {
+                $results[] = array('id' => $pid, 'title' => $title, 'status' => 'error', 'msg' => 'Sin HTML');
+                $this->save_last_result($pid, 'error');
+                continue;
+            }
+            $new_hash = hash('sha256', $html);
+            $old_hash = $this->get_saved_hash($pid);
+            if (!empty($old_hash) && hash_equals($old_hash, $new_hash)) {
+                $results[] = array('id' => $pid, 'title' => $title, 'status' => 'nochange', 'msg' => 'Sin cambios');
+                $nochange++;
+                $this->save_last_result($pid, 'nochange');
+                continue;
+            }
+            if ($s3_mode) {
+                $s3 = $this->upload_to_s3($html, $title, $pid);
+                if ($s3 && !empty($s3['success'])) {
+                    $this->save_generation_data($pid, $s3['url'], 's3');
+                    $this->save_hash($pid, $new_hash);
+                    $this->save_last_result($pid, 'ok');
+                    $results[] = array('id' => $pid, 'title' => $title, 'status' => 'ok', 'storage' => 's3');
+                    // Home usa default behavior, omitir de CF
+                    if ($has_cloudfront && $pid !== 0) {
+                        $slug = $this->get_page_slug($pid);
+                        if ($slug) {
+                            $paths_for_cf[] = '/' . ltrim($slug, '/');
+                        }
+                    }
+                } else {
+                    $err = $s3 && isset($s3['error']) ? $s3['error'] : 'Error en S3';
+                    $results[] = array('id' => $pid, 'title' => $title, 'status' => 'error', 'msg' => $err);
+                    $this->save_last_result($pid, 'error');
+                }
+            } else {
+                $url = $this->save_to_temp_folder($html, $title, $pid);
+                if ($url) {
+                    $this->save_generation_data($pid, $url, 'local');
+                    $this->save_hash($pid, $new_hash);
+                    $this->save_last_result($pid, 'ok');
+                    $results[] = array('id' => $pid, 'title' => $title, 'status' => 'ok', 'storage' => 'local');
+                } else {
+                    $results[] = array('id' => $pid, 'title' => $title, 'status' => 'error', 'msg' => 'No se pudo guardar local');
+                    $this->save_last_result($pid, 'error');
+                }
+            }
+        }
+
+        // CloudFront en lote
+        $cf_done = false;
+        if ($s3_mode && $has_cloudfront && !empty($paths_for_cf)) {
+            $paths_for_cf = array_values(array_unique($paths_for_cf));
+            $cfm = new CloudFrontManager();
+            if (method_exists($cfm, 'create_behaviors_bulk')) {
+                $cf_done = $cfm->create_behaviors_bulk($paths_for_cf);
+            } else {
+                // Fallback: crear uno por uno (no ideal, pero asegura funcionalidad)
+                $ok_all = true;
+                foreach ($paths_for_cf as $p) {
+                    $ok_all = $ok_all && $cfm->create_behavior_without_placeholder($p);
+                }
+                $cf_done = $ok_all;
+            }
+
+            // Guardar estado por página (simplificado: todos ok si bulk ok)
+            foreach ($page_ids as $pid) {
+                if ($pid === 0) { continue; }
+                $slug = $this->get_page_slug($pid);
+                if (!$slug) { continue; }
+                $path = '/' . ltrim($slug, '/');
+                $this->save_cloudfront_behavior_status($pid, $cf_done ? 'active' : 'error', $path);
+            }
+        }
+
+        // Resumen
+        $ok_count = count(array_filter($results, function($r){ return $r['status'] === 'ok'; }));
+        $err_count = count($results) - $ok_count;
+        $msg = 'Generadas: ' . $ok_count . ' | Errores: ' . $err_count . ' | Sin cambios: ' . $nochange;
+        if ($s3_mode && $has_cloudfront) {
+            $msg .= ' | CloudFront: ' . ($cf_done ? 'actualizado' : (empty($paths_for_cf) ? 'sin cambios' : 'error'));
+        }
+
+        wp_send_json_success(array(
+            'message' => $msg,
+            'results' => $results,
+        ));
     }
     
     private function get_page_html($page_id) {
@@ -810,12 +1066,49 @@ class StaticPageGenerator {
         $page_id = intval($_POST['page_id']);
         $enabled = intval($_POST['enabled']);
         
-        update_post_meta($page_id, 'spg_autoupdate', $enabled);
+        if ($page_id <= 0 || !get_post($page_id)) {
+            wp_send_json_error(array('message' => 'Página inválida para Auto-update'));
+        }
         
-        wp_send_json_success();
+        update_post_meta($page_id, 'spg_autoupdate', $enabled ? '1' : '0');
+        
+        wp_send_json_success(array('message' => 'Auto-update actualizado'));
+    }
+
+    public function toggle_autoupdate_bulk() {
+        if (!wp_verify_nonce($_POST['nonce'], 'spg_autoupdate_nonce')) {
+            wp_die('Error de seguridad');
+        }
+        if (!current_user_can('manage_options')) {
+            wp_die('Permisos insuficientes');
+        }
+        $ids = isset($_POST['page_ids']) ? (array) $_POST['page_ids'] : array();
+        $enabled = intval($_POST['enabled']);
+        if (empty($ids)) {
+            wp_send_json_error(array('message' => 'No se recibieron páginas.'));
+        }
+        $enabled_types = $this->get_enabled_post_types();
+        $ok = 0; $skipped = 0; $invalid = 0;
+        foreach ($ids as $id) {
+            $pid = intval($id);
+            if ($pid <= 0) { $skipped++; continue; }
+            $post = get_post($pid);
+            if (!$post) { $invalid++; continue; }
+            if (!in_array($post->post_type, $enabled_types, true)) { $skipped++; continue; }
+            update_post_meta($pid, 'spg_autoupdate', $enabled ? '1' : '0');
+            $ok++;
+        }
+        $msg = 'Actualizados: ' . $ok;
+        if ($skipped) { $msg .= ' | Omitidos: ' . $skipped; }
+        if ($invalid) { $msg .= ' | Inválidos: ' . $invalid; }
+        wp_send_json_success(array('message' => $msg));
     }
     
     public function handle_page_update($post_id, $post_after, $post_before) {
+        // Ignorar revisiones/autosaves
+        if (wp_is_post_revision($post_id) || wp_is_post_autosave($post_id)) {
+            return;
+        }
         // Solo actuar para los post types habilitados
         $enabled = $this->get_enabled_post_types();
         if (!in_array($post_after->post_type, $enabled, true)) {
@@ -837,10 +1130,20 @@ class StaticPageGenerator {
             return;
         }
         
+        // Regeneración condicional por hash en auto-update
+        $new_hash = hash('sha256', $html_content);
+        $old_hash = $this->get_saved_hash($post_id);
+        if (!empty($old_hash) && hash_equals($old_hash, $new_hash)) {
+            $this->save_last_result($post_id, 'nochange');
+            return; // Sin cambios: no subir ni invalidar
+        }
+        
         if ($this->s3_credentials_configured()) {
             $s3_result = $this->upload_to_s3($html_content, $post_after->post_title, $post_id);
             if ($s3_result && isset($s3_result['success']) && $s3_result['success']) {
                 $this->save_generation_data($post_id, $s3_result['url'], 's3');
+                $this->save_hash($post_id, $new_hash);
+                $this->save_last_result($post_id, 'ok');
                 // Actualizar CloudFront si está configurado
                 if ($this->cloudfront_configured()) {
                     $this->create_cloudfront_behavior_for_page($post_id);
@@ -850,7 +1153,46 @@ class StaticPageGenerator {
             $temp_url = $this->save_to_temp_folder($html_content, $post_after->post_title, $post_id);
             if ($temp_url) {
                 $this->save_generation_data($post_id, $temp_url, 'local');
+                $this->save_hash($post_id, $new_hash);
+                $this->save_last_result($post_id, 'ok');
+            } else {
+                $this->save_last_result($post_id, 'error');
             }
+        }
+    }
+
+    private function get_saved_hash($page_id) {
+        if ($page_id === 0) {
+            return get_option('spg_home_content_hash', '');
+        }
+        if ($page_id > 0) {
+            return get_post_meta($page_id, 'spg_content_hash', true);
+        }
+        return '';
+    }
+
+    private function save_hash($page_id, $hash) {
+        if (!is_string($hash) || $hash === '') { return; }
+        if ($page_id === 0) {
+            update_option('spg_home_content_hash', $hash);
+            return;
+        }
+        if ($page_id > 0) {
+            update_post_meta($page_id, 'spg_content_hash', $hash);
+        }
+    }
+
+    private function save_last_result($page_id, $status) {
+        $status = in_array($status, array('ok','error','nochange'), true) ? $status : '';
+        $now = current_time('mysql');
+        if ($page_id === 0) {
+            if ($status) { update_option('spg_home_last_result', $status); }
+            update_option('spg_home_last_result_at', $now);
+            return;
+        }
+        if ($page_id > 0) {
+            if ($status) { update_post_meta($page_id, 'spg_last_result', $status); }
+            update_post_meta($page_id, 'spg_last_result_at', $now);
         }
     }
 
@@ -1633,6 +1975,58 @@ class CloudFrontManager {
     public function create_behavior($path_pattern, $s3_prefix = '') {
         // Versión que SÍ crea placeholder en S3 (para paths manuales)
         return $this->create_behavior_internal($path_pattern, $s3_prefix, true);
+    }
+
+    public function create_behaviors_bulk($paths) {
+        if (!$this->cloudfront_client || !$this->distribution_id) {
+            error_log('StaticForge CloudFront: Cliente o Distribution ID no disponible para bulk');
+            return false;
+        }
+        if (!is_array($paths) || empty($paths)) {
+            return true; // nada que hacer
+        }
+
+        // Normalizar y deduplicar
+        $norm = array();
+        foreach ($paths as $p) {
+            $np = $this->validate_and_normalize_path($p);
+            if ($np && $np !== '/') {
+                $norm[$np] = true;
+            }
+        }
+        $norm_paths = array_keys($norm);
+        if (empty($norm_paths)) {
+            return true;
+        }
+
+        // 1. Obtener configuración una vez
+        $distribution_config = $this->get_distribution_config();
+        if (!$distribution_config) {
+            error_log('StaticForge CloudFront: No se pudo obtener configuración para bulk');
+            return false;
+        }
+
+        // 2. Añadir behaviors para todos los paths
+        foreach ($norm_paths as $np) {
+            $ok = $this->add_behaviors_to_config($distribution_config, $np);
+            if (!$ok) {
+                error_log('StaticForge CloudFront: Error añadiendo behavior en bulk para ' . $np);
+                // continuamos para intentar el resto
+            }
+        }
+
+        // 3. Actualizar distribución una sola vez
+        $update_ok = $this->update_distribution($distribution_config);
+        if ($update_ok) {
+            // 4. Invalidar en lote
+            $inv = array();
+            foreach ($norm_paths as $np) {
+                $inv[] = $np;
+                $inv[] = $np . '/*';
+            }
+            $this->create_invalidation($inv);
+        }
+        return $update_ok;
     }
     
     private function create_behavior_internal($path_pattern, $s3_prefix = '', $create_placeholder = true) {
