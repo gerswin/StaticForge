@@ -1452,50 +1452,6 @@ class StaticPageGenerator {
             
             <h2>Behaviors Actuales</h2>
             <?php $this->display_current_behaviors(); ?>
-
-            <h3>Eliminar Múltiples Behaviors</h3>
-            <?php 
-            $cfm = new CloudFrontManager();
-            $behaviors = $cfm->get_all_behaviors();
-            // Filtrar solo behaviors cuyo TargetOriginId sea StaticS3Origin
-            if (is_array($behaviors)) {
-                $behaviors = array_values(array_filter($behaviors, function($b){
-                    return isset($b['TargetOriginId']) && $b['TargetOriginId'] === 'StaticS3Origin';
-                }));
-            }
-            if (is_array($behaviors) && !empty($behaviors)):
-            ?>
-            <form method="post" action="" style="margin:12px 0;">
-                <?php wp_nonce_field('spg_cloudfront_delete_nonce', 'delete_nonce'); ?>
-                <div style="max-height:220px; overflow:auto; background:#fff; border:1px solid #ccd0d4; padding:8px;">
-                    <label style="display:block; margin-bottom:8px;">
-                        <input type="checkbox" id="spg-cf-del-all" /> Seleccionar todos
-                    </label>
-                    <?php foreach ($behaviors as $b): 
-                        if (!isset($b['PathPattern'])) continue;
-                        $pp = $b['PathPattern'];
-                    ?>
-                        <label style="display:block; margin:4px 0;">
-                            <input type="checkbox" name="delete_paths[]" value="<?php echo esc_attr($pp); ?>" class="spg-cf-del-item" />
-                            <code><?php echo esc_html($pp); ?></code>
-                        </label>
-                    <?php endforeach; ?>
-                </div>
-                <?php submit_button('🗑️ Eliminar seleccionados', 'delete', 'delete_behaviors_bulk'); ?>
-            </form>
-            <script>
-            (function(){
-                var all = document.getElementById('spg-cf-del-all');
-                if (all) {
-                    all.addEventListener('change', function(){
-                        document.querySelectorAll('.spg-cf-del-item').forEach(function(cb){ cb.checked = all.checked; });
-                    });
-                }
-            })();
-            </script>
-            <?php else: ?>
-                <p>No hay behaviors adicionales configurados.</p>
-            <?php endif; ?>
             
             <hr>
             
@@ -1673,19 +1629,33 @@ class StaticPageGenerator {
         }
         
         ?>
+        <form method="post" action="">
+        <?php wp_nonce_field('spg_cloudfront_delete_nonce', 'delete_nonce'); ?>
+        <div style="margin: 8px 0;">
+            <?php submit_button('🗑️ Eliminar seleccionados', 'delete', 'delete_behaviors_bulk', false); ?>
+        </div>
         <table class="wp-list-table widefat fixed striped">
             <thead>
                 <tr>
+                    <th style="width:36px; text-align:center;"><input type="checkbox" id="spg-cf-table-select-all" /></th>
                     <th>Path Pattern</th>
                     <th>Target Origin</th>
                     <th>Cache Policy</th>
                     <th>Function</th>
-                    <th>Acciones</th>
                 </tr>
             </thead>
             <tbody>
-                <?php foreach ($behaviors as $behavior): ?>
+                <?php foreach ($behaviors as $behavior): 
+                    $is_s3 = isset($behavior['TargetOriginId']) && $behavior['TargetOriginId'] === 'StaticS3Origin';
+                ?>
                 <tr>
+                    <td style="text-align:center;">
+                        <?php if ($is_s3): ?>
+                            <input type="checkbox" name="delete_paths[]" value="<?php echo esc_attr($behavior['PathPattern']); ?>" class="spg-cf-table-item" />
+                        <?php else: ?>
+                            —
+                        <?php endif; ?>
+                    </td>
                     <td><strong><?php echo esc_html($behavior['PathPattern']); ?></strong></td>
                     <td><?php echo esc_html($behavior['TargetOriginId']); ?></td>
                     <td><?php echo isset($behavior['CachePolicyId']) ? '✅ Configurado' : '❌ Sin cache policy'; ?></td>
@@ -1698,20 +1668,24 @@ class StaticPageGenerator {
                         }
                         ?>
                     </td>
-                    <td>
-                        <form method="post" action="" style="display:inline;">
-                            <?php wp_nonce_field('spg_cloudfront_delete_nonce', 'delete_nonce'); ?>
-                            <input type="hidden" name="path_pattern" value="<?php echo esc_attr($behavior['PathPattern']); ?>">
-                            <button type="submit" name="delete_behavior" class="button button-small" 
-                                    onclick="return confirm('¿Estás seguro de eliminar el behavior <?php echo esc_js($behavior['PathPattern']); ?>?');">
-                                🗑️ Eliminar
-                            </button>
-                        </form>
-                    </td>
                 </tr>
                 <?php endforeach; ?>
             </tbody>
         </table>
+        <div style="margin: 8px 0;">
+            <?php submit_button('🗑️ Eliminar seleccionados', 'delete', 'delete_behaviors_bulk', false); ?>
+        </div>
+        </form>
+        <script>
+        (function(){
+            var all = document.getElementById('spg-cf-table-select-all');
+            if (all) {
+                all.addEventListener('change', function(){
+                    document.querySelectorAll('.spg-cf-table-item').forEach(function(cb){ cb.checked = all.checked; });
+                });
+            }
+        })();
+        </script>
         <?php
     }
     
@@ -1997,8 +1971,10 @@ class CloudFrontManager {
                 ]
             ]);
             
-            error_log('StaticForge CloudFront: Cliente SDK inicializado correctamente');
-            error_log('StaticForge CloudFront: Distribution ID: ' . $this->distribution_id);
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('StaticForge CloudFront: Cliente SDK inicializado correctamente');
+                error_log('StaticForge CloudFront: Distribution ID: ' . $this->distribution_id);
+            }
             
             // Obtener dominio de CloudFront
             $this->get_distribution_domain();
