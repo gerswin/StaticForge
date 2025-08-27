@@ -1436,6 +1436,10 @@ class StaticPageGenerator {
         if (isset($_POST['delete_behavior'])) {
             $this->handle_cloudfront_behavior_deletion();
         }
+
+        if (isset($_POST['delete_behaviors_bulk'])) {
+            $this->handle_cloudfront_behaviors_bulk_deletion();
+        }
         
         ?>
         <div class="wrap">
@@ -1443,6 +1447,44 @@ class StaticPageGenerator {
             
             <h2>Behaviors Actuales</h2>
             <?php $this->display_current_behaviors(); ?>
+
+            <h3>Eliminar Múltiples Behaviors</h3>
+            <?php 
+            $cfm = new CloudFrontManager();
+            $behaviors = $cfm->get_all_behaviors();
+            if (is_array($behaviors) && !empty($behaviors)):
+            ?>
+            <form method="post" action="" style="margin:12px 0;">
+                <?php wp_nonce_field('spg_cloudfront_delete_nonce', 'delete_nonce'); ?>
+                <div style="max-height:220px; overflow:auto; background:#fff; border:1px solid #ccd0d4; padding:8px;">
+                    <label style="display:block; margin-bottom:8px;">
+                        <input type="checkbox" id="spg-cf-del-all" /> Seleccionar todos
+                    </label>
+                    <?php foreach ($behaviors as $b): 
+                        if (!isset($b['PathPattern'])) continue;
+                        $pp = $b['PathPattern'];
+                    ?>
+                        <label style="display:block; margin:4px 0;">
+                            <input type="checkbox" name="delete_paths[]" value="<?php echo esc_attr($pp); ?>" class="spg-cf-del-item" />
+                            <code><?php echo esc_html($pp); ?></code>
+                        </label>
+                    <?php endforeach; ?>
+                </div>
+                <?php submit_button('🗑️ Eliminar seleccionados', 'delete', 'delete_behaviors_bulk'); ?>
+            </form>
+            <script>
+            (function(){
+                var all = document.getElementById('spg-cf-del-all');
+                if (all) {
+                    all.addEventListener('change', function(){
+                        document.querySelectorAll('.spg-cf-del-item').forEach(function(cb){ cb.checked = all.checked; });
+                    });
+                }
+            })();
+            </script>
+            <?php else: ?>
+                <p>No hay behaviors adicionales configurados.</p>
+            <?php endif; ?>
             
             <hr>
             
@@ -1502,6 +1544,28 @@ class StaticPageGenerator {
             </div>
         </div>
         <?php
+    }
+
+    private function handle_cloudfront_behaviors_bulk_deletion() {
+        if (!wp_verify_nonce($_POST['delete_nonce'] ?? '', 'spg_cloudfront_delete_nonce')) {
+            wp_die('Error de seguridad');
+        }
+        if (!current_user_can('manage_options')) {
+            wp_die('Permisos insuficientes');
+        }
+        $paths = isset($_POST['delete_paths']) ? (array) $_POST['delete_paths'] : array();
+        $paths = array_values(array_unique(array_map('sanitize_text_field', $paths)));
+        if (empty($paths)) {
+            echo '<div class="notice notice-warning"><p>No se seleccionaron behaviors para eliminar.</p></div>';
+            return;
+        }
+        $cfm = new CloudFrontManager();
+        $ok = $cfm->delete_behaviors_bulk($paths);
+        if ($ok) {
+            echo '<div class="notice notice-success"><p>✅ Behaviors eliminados: ' . esc_html(count($paths)) . '</p></div>';
+        } else {
+            echo '<div class="notice notice-error"><p>❌ Error al eliminar behaviors seleccionados.</p></div>';
+        }
     }
     
     private function handle_cloudfront_path_creation() {
@@ -2942,8 +3006,83 @@ class CloudFrontManager {
             return false;
         }
     }
-    
+
     // Firma manual eliminada: CloudFront se maneja vía SDK
+
+    public function delete_behaviors_bulk($path_patterns) {
+        if (!$this->cloudfront_client || !$this->distribution_id) {
+            error_log('StaticForge CloudFront: Cliente o Distribution ID no disponible (bulk)');
+            return false;
+        }
+        if (!is_array($path_patterns) || empty($path_patterns)) {
+            return true; // nada que eliminar
+        }
+        try {
+            // 1. Obtener configuración actual
+            $result = $this->cloudfront_client->getDistributionConfig([
+                'Id' => $this->distribution_id
+            ]);
+            
+            $config = $result['DistributionConfig'];
+            $etag = $result['ETag'];
+            
+            if (!isset($config['CacheBehaviors']['Items']) || empty($config['CacheBehaviors']['Items'])) {
+                error_log('StaticForge CloudFront: No hay behaviors para eliminar (bulk)');
+                return true;
+            }
+            
+            // Normalizar lista de patrones a eliminar
+            $to_delete = array();
+            foreach ($path_patterns as $pp) {
+                $pp = trim($pp);
+                if ($pp !== '') { $to_delete[$pp] = true; }
+            }
+            if (empty($to_delete)) { return true; }
+            
+            // 2. Filtrar behaviors
+            $new_behaviors = [];
+            $removed = [];
+            foreach ($config['CacheBehaviors']['Items'] as $behavior) {
+                $pp = $behavior['PathPattern'] ?? '';
+                if ($pp && isset($to_delete[$pp])) {
+                    $removed[] = $pp;
+                } else {
+                    $new_behaviors[] = $behavior;
+                }
+            }
+            
+            if (empty($removed)) {
+                error_log('StaticForge CloudFront: No coincidieron behaviors para eliminar (bulk)');
+                return true;
+            }
+            
+            $config['CacheBehaviors']['Items'] = $new_behaviors;
+            $config['CacheBehaviors']['Quantity'] = count($new_behaviors);
+            
+            // 3. Enviar actualización a CloudFront
+            $update_result = $this->cloudfront_client->updateDistribution([
+                'Id' => $this->distribution_id,
+                'DistributionConfig' => $config,
+                'IfMatch' => $etag
+            ]);
+            
+            error_log('StaticForge CloudFront: Behaviors eliminados (bulk): ' . implode(', ', $removed));
+            
+            // 4. Invalidar paths eliminados
+            $inv = [];
+            foreach ($removed as $pp) {
+                $inv[] = $pp;
+                $inv[] = rtrim($pp, '/') . '/*';
+            }
+            $this->create_invalidation($inv);
+            
+            return true;
+            
+        } catch (\Exception $e) {
+            error_log('StaticForge CloudFront: Error eliminando behaviors en bulk: ' . $e->getMessage());
+            return false;
+        }
+    }
 }
 
 new StaticPageGenerator();
