@@ -2,7 +2,7 @@
 /**
  * Plugin Name: StaticForge
  * Description: Convierte WP en HTML sólido
- * Version: 1.3.0
+ * Version: 1.3.1
  * Author: Gerswin Pineda
  * Update URI: https://github.com/gerswin/StaticForge
  * Requires at least: 6.0
