@@ -113,6 +113,10 @@ Contribuciones son bienvenidas.
 - UI: columna "Resultado" con badges para "Actualizado", "Sin cambios" y "Error".
 - Bulk: omite paths sin cambios en la actualización única de CloudFront.
 
+### v1.3.4
+- CloudFront: eliminación múltiple de behaviors en una sola operación (UI con checkboxes y eliminación consolidada).
+- SDK: `delete_behaviors_bulk` actualiza la distribución e invalida todos los paths en un único batch.
+
 ### v1.3.0
 - Selección de post types habilitados para generación estática (configurable en Configuración S3).
 - Panel con filtros por estado (Publicados, Borradores, etc.) y paginación con tamaño por página.
