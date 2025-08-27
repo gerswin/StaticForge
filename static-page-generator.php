@@ -2,7 +2,7 @@
 /**
  * Plugin Name: StaticForge
  * Description: Convierte WP en HTML sólido
- * Version: 1.3.5
+ * Version: 1.3.6
  * Author: Gerswin Pineda
  * Update URI: https://github.com/gerswin/StaticForge
  * Requires at least: 6.0
@@ -2482,11 +2482,25 @@ class CloudFrontManager {
             }
         }
         
-        // Default FunctionAssociations if not found from existing behaviors
-        if (!$found_s3_behavior) {
+        // Asegurar CloudFront Function para index.html en directorios
+        $function_arn = $this->ensure_index_rewrite_function();
+        if ($function_arn) {
             $behavior_array['FunctionAssociations'] = [
-                'Quantity' => 0
+                'Quantity' => 1,
+                'Items' => [
+                    [
+                        'EventType' => 'viewer-request',
+                        'FunctionARN' => $function_arn
+                    ]
+                ]
             ];
+        } else {
+            // Default FunctionAssociations if not found from existing behaviors
+            if (!$found_s3_behavior) {
+                $behavior_array['FunctionAssociations'] = [
+                    'Quantity' => 0
+                ];
+            }
         }
         
         // Only add GrpcConfig if CloudFront version supports it
@@ -2506,6 +2520,78 @@ class CloudFrontManager {
                  $behavior_array['CachePolicyId'] . ', OriginRequest=' . $behavior_array['OriginRequestPolicyId']);
         
         return $behavior_array;
+    }
+
+    private function ensure_index_rewrite_function() {
+        // Intenta usar caché de opción para evitar llamadas frecuentes
+        $cached_arn = get_option('spg_cf_function_arn');
+        $cached_name = get_option('spg_cf_function_name', 'StaticForgeDirIndex');
+        if ($cached_arn) {
+            return $cached_arn;
+        }
+        if (!$this->cloudfront_client) {
+            return false;
+        }
+        try {
+            $name = $cached_name ?: 'StaticForgeDirIndex';
+            $code = "function handler(event) {\n  var req = event.request;\n  var uri = req.uri || '/';\n  // Normaliza doble slash\n  if (!uri.startsWith('/')) { uri = '/' + uri; }\n  // Si termina en '/', agrega index.html\n  if (uri.endsWith('/')) {\n    req.uri = uri + 'index.html';\n    return req;\n  }\n  // Si no tiene extension (no contiene '.') en el ultimo segmento, asumir directorio\n  var last = uri.substring(uri.lastIndexOf('/') + 1);\n  if (last.indexOf('.') === -1) {\n    req.uri = uri + '/index.html';\n  }\n  return req;\n}";
+
+            // Intentar obtener función existente por nombre
+            $exists = false;
+            try {
+                $gf = $this->cloudfront_client->describeFunction([
+                    'Name' => $name
+                ]);
+                if (isset($gf['ETag'])) {
+                    $exists = true;
+                    $etag = $gf['ETag'];
+                }
+            } catch (\Aws\CloudFront\Exception\CloudFrontException $e) {
+                $exists = false;
+            }
+
+            if (!$exists) {
+                // Crear función
+                $create = $this->cloudfront_client->createFunction([
+                    'Name' => $name,
+                    'FunctionConfig' => [
+                        'Comment' => 'StaticForge directory index rewrite',
+                        'Runtime' => 'cloudfront-js-1.0'
+                    ],
+                    'FunctionCode' => $code
+                ]);
+                $etag = $create['ETag'];
+            } else {
+                // Actualizar código por si cambió
+                $update = $this->cloudfront_client->updateFunction([
+                    'Name' => $name,
+                    'IfMatch' => $etag,
+                    'FunctionConfig' => [
+                        'Comment' => 'StaticForge directory index rewrite',
+                        'Runtime' => 'cloudfront-js-1.0'
+                    ],
+                    'FunctionCode' => $code
+                ]);
+                $etag = $update['ETag'];
+            }
+
+            // Publicar la función a LIVE
+            $pub = $this->cloudfront_client->publishFunction([
+                'Name' => $name,
+                'IfMatch' => $etag
+            ]);
+
+            if (isset($pub['FunctionSummary']['FunctionMetadata']['FunctionARN'])) {
+                $arn = $pub['FunctionSummary']['FunctionMetadata']['FunctionARN'];
+                update_option('spg_cf_function_arn', $arn);
+                update_option('spg_cf_function_name', $name);
+                return $arn;
+            }
+        } catch (\Exception $e) {
+            error_log('StaticForge CloudFront: No se pudo asegurar Function de index: ' . $e->getMessage());
+            return false;
+        }
+        return false;
     }
     
     private function get_s3_origin_id_from_config_array($distribution_config) {

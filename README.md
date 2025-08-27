@@ -122,6 +122,11 @@ Contribuciones son bienvenidas.
 - Panel principal: el enlace a CloudFront se muestra solo si es Home o hay behavior activo para esa página.
 - Al eliminar behavior(es), se limpia el estado interno para que el listado deje de mostrar el enlace CF.
 
+### v1.3.6
+- CloudFront: behaviors con CloudFront Function (viewer-request) para servir `index.html` en rutas de directorio (`/path`, `/path/` → `/path/index.html`).
+- UI CloudFront: unificada la eliminación en “Behaviors Actuales” con checkboxes (solo `StaticS3Origin`) y botón “Eliminar seleccionados”.
+- Logs: reducción de ruido en CloudFrontManager (logs de inicialización solo en `WP_DEBUG`).
+
 ### v1.3.0
 - Selección de post types habilitados para generación estática (configurable en Configuración S3).
 - Panel con filtros por estado (Publicados, Borradores, etc.) y paginación con tamaño por página.
